@@ -215,6 +215,9 @@ $script:Sw = New-Object System.Diagnostics.Stopwatch
 $script:People = @()
 $script:Idx = 0
 $script:EndFlashed = $false
+# Minimum share per speaker (seconds) and the first plan, fixed when the first speaker starts (0 = not set).
+$script:MinShare = 60
+$script:Plan = 0.0
 
 # ---------------- time helpers ----------------
 function Fmt([double]$sec) {
@@ -232,22 +235,33 @@ function Get-MeetingLeft { ($script:End - (Get-Date)).TotalSeconds }
 # Pure share calculation (no clock or UI state) so it can be checked in isolation.
 # Whoever finished early leaves no reserved time, so their unused seconds flow into
 # $left and are split evenly across the speakers who have not started.
-function Calc-Share([double]$left, [double]$reserved, [int]$pending) {
+function Calc-Share([double]$left, [double]$reserved, [int]$pending, [double]$min = 0) {
     if ($pending -le 0) { return 0 }
     $share = [math]::Max(0, $left - $reserved) / $pending
     # Round down to 10 s so the numbers stay readable.
-    [math]::Floor($share / 10) * 10
+    [math]::Max($min, [math]::Floor($share / 10) * 10)
+}
+
+# Time the current (locked) speaker still has, and how many speakers have no share yet.
+function Get-Pending {
+    $cur = $script:People[$script:Idx]
+    $reserved = 0.0
+    if ($cur.Budget -gt 0) { $reserved = [math]::Max(0, $cur.Budget - (Get-Elapsed $script:Idx)) }
+    $pending = @(for ($j = $script:Idx; $j -lt $script:People.Count; $j++) { if ($script:People[$j].Budget -eq 0) { $j } }).Count
+    [pscustomobject]@{ Reserved = $reserved; Pending = $pending }
 }
 
 # Share for a speaker who has not started yet: the meeting time that is left,
 # minus what the current (locked) speaker still has, split across everyone unlocked.
 function Get-Preview {
-    $left = Get-MeetingLeft
-    $cur = $script:People[$script:Idx]
-    $reserved = 0.0
-    if ($cur.Budget -gt 0) { $reserved = [math]::Max(0, $cur.Budget - (Get-Elapsed $script:Idx)) }
-    $pending = @(for ($j = $script:Idx; $j -lt $script:People.Count; $j++) { if ($script:People[$j].Budget -eq 0) { $j } }).Count
-    Calc-Share $left $reserved $pending
+    $pi = Get-Pending
+    Calc-Share (Get-MeetingLeft) $pi.Reserved $pi.Pending $script:MinShare
+}
+
+# True when the one-minute minimum no longer fits before the meeting end time.
+function Test-Overbooked {
+    $pi = Get-Pending
+    $pi.Pending -gt 0 -and ((Get-MeetingLeft) - $pi.Reserved) -lt ($pi.Pending * $script:MinShare)
 }
 
 function Get-Budget([int]$i) {
@@ -257,7 +271,24 @@ function Get-Budget([int]$i) {
 
 function Lock-Budget {
     $p = $script:People[$script:Idx]
-    if ($p.Budget -eq 0) { $p.Budget = [math]::Max(30, (Get-Preview)) }
+    if ($p.Budget -eq 0) {
+        # The first plan is the share at the moment the first speaker starts, before any minimum is applied.
+        if ($script:Plan -le 0) {
+            $pi = Get-Pending
+            $script:Plan = Calc-Share (Get-MeetingLeft) $pi.Reserved $pi.Pending 0
+        }
+        $p.Budget = [math]::Max($script:MinShare, (Get-Preview))
+    }
+}
+
+# Recomputes the first plan from the current state (used when settings change).
+function Reset-Plan {
+    $script:Plan = 0.0
+    $cur = $script:People[$script:Idx]
+    if ($cur.Budget -gt 0) {
+        $n = $script:People.Count - $script:Idx
+        $script:Plan = Calc-Share ((Get-MeetingLeft) + (Get-Elapsed $script:Idx)) 0 $n 0
+    }
 }
 
 function Get-Phase {
@@ -399,7 +430,10 @@ function Paint-Strip($g) {
     Draw-Text $g ((Get-Date).ToString('HH:mm')) (FN 14) $C.White ($x + $lw + (S 6)) 0 (S 60) $H
 
     $left = Get-MeetingLeft
-    if ($left -gt 0) {
+    if ($left -gt 0 -and (Test-Overbooked)) {
+        $tail = '종료 시각 초과 예상'
+        $tc = $C.Coral
+    } elseif ($left -gt 0) {
         $tail = '{0}분 남음' -f [int][math]::Ceiling($left / 60)
         $tc = $C.Steel
     } else {
@@ -448,7 +482,14 @@ function Paint-Stage($g) {
     [void](Draw-PillRight $g $bt (FKM 12) $bf $bc $bb ($W - $pad) (S 15) (S 24))
 
     # Countdown digits
-    $top = S 40
+    # Change versus the first plan, right above the digits: + is accent blue, - is coral.
+    $delta = if ($script:Plan -gt 0) { [math]::Round(($st.Budget - $script:Plan) / 10) * 10 } else { 0 }
+    if ($delta -gt 0)     { $dt = '+' + (Fmt $delta); $dcol = if ($isOver) { $C.White } else { $C.Primary } }
+    elseif ($delta -lt 0) { $dt = '-' + (Fmt $delta); $dcol = if ($isOver) { $C.White } else { $C.Coral } }
+    else                  { $dt = '±00:00'; $dcol = $sub }
+    Draw-Text $g $dt (FKM 14) $dcol $pad (S 38) $cw (S 22) 'Center'
+
+    $top = S 60
     $bottom = $H - (S 58)
     $dh = [math]::Max((S 30), $bottom - $top)
     $px = [math]::Max(20, [math]::Min($dh * 0.82, $W / 3.5))
@@ -585,6 +626,7 @@ function Start-Over {
     $script:Idx = 0
     $script:End = Get-NextHour
     $script:EndFlashed = $false
+    $script:Plan = 0.0
     Refresh-All
 }
 
@@ -706,6 +748,32 @@ function New-DlgLabel([string]$text, $font, $color, [int]$x, [int]$y, [int]$w, [
     $l
 }
 
+# Resolves the HH:mm picked in the settings dialog to the next time it occurs (today, or tomorrow if past).
+function Resolve-EndTime($picked) {
+    $now = Get-Date
+    $end = $now.Date.AddHours($picked.Hour).AddMinutes($picked.Minute)
+    if ($end -le $now) { $end = $end.AddDays(1) }
+    $end
+}
+
+# Caps the speaker count so every remaining speaker can get at least MinShare seconds.
+# Speakers who already finished stay counted; only the ones still to come are limited.
+$script:SetHintBase = '남은 회의 시간은 아직 시작하지 않은 발표자에게 자동으로 똑같이 나뉩니다.'
+function Update-SetMax([bool]$clamped = $false) {
+    $leftSec = ((Resolve-EndTime $script:SetDt.Value) - (Get-Date)).TotalSeconds
+    $fit = [int][math]::Floor($leftSec / $script:MinShare)
+    $max = [math]::Min(50, [math]::Max($script:Idx + 1, $script:Idx + $fit))
+    $script:SetNum.Maximum = [decimal]$max
+    if ($script:SetNum.Value -gt $max) { $script:SetNum.Value = [decimal]$max; $clamped = $true }
+    if ($leftSec -lt $script:MinShare) {
+        $script:SetHint.Text = '남은 시간이 1분 미만이어서 발표자 수는 최소 인원으로 제한됩니다.'
+    } elseif ($clamped -or $fit -lt (50 - $script:Idx)) {
+        $script:SetHint.Text = ('남은 시간 기준 최대 {0}명입니다 (1인당 최소 1분).' -f $max)
+    } else {
+        $script:SetHint.Text = $script:SetHintBase
+    }
+}
+
 function Show-Settings {
     $dlg = New-Object Windows.Forms.Form
     $dlg.Text = 'CameraHAL_MeetingTimer'
@@ -739,7 +807,12 @@ function Show-Settings {
     $dt.Value = $script:End
     $dt.SetBounds((S 172), (S 98), (S 120), (S 32))
 
-    $h1 = New-DlgLabel '남은 회의 시간은 아직 시작하지 않은 발표자에게 자동으로 똑같이 나뉩니다.' (FK 12) $C.Graphite 24 140 292 40
+    $h1 = New-DlgLabel $script:SetHintBase (FK 12) $C.Graphite 24 136 292 48
+    $script:SetNum = $num
+    $script:SetDt = $dt
+    $script:SetHint = $h1
+    $dt.add_ValueChanged({ Update-SetMax })
+    Update-SetMax
 
     $cbTop = New-Object Windows.Forms.CheckBox
     $cbTop.Text = '항상 다른 창 위에 표시'
@@ -779,11 +852,12 @@ function Show-Settings {
             Start-Over
         } else {
             # Picked time is today's; if it is already past, it means tomorrow.
-            $now = Get-Date
-            $end = $now.Date.AddHours($dt.Value.Hour).AddMinutes($dt.Value.Minute)
-            if ($end -le $now) { $end = $end.AddDays(1) }
+            $end = Resolve-EndTime $dt.Value
+            $changed = $end -ne $script:End -or $script:Cfg.Count -ne $script:People.Count
             if ($end -ne $script:End) { $script:End = $end; $script:EndFlashed = $false }
             Set-Count $script:Cfg.Count
+            # A different end time or speaker count makes the old first plan meaningless.
+            if ($changed) { Reset-Plan }
         }
         try { Save-Config } catch { }
         Refresh-All
