@@ -229,6 +229,16 @@ function Get-Elapsed([int]$i) {
 
 function Get-MeetingLeft { ($script:End - (Get-Date)).TotalSeconds }
 
+# Pure share calculation (no clock or UI state) so it can be checked in isolation.
+# Whoever finished early leaves no reserved time, so their unused seconds flow into
+# $left and are split evenly across the speakers who have not started.
+function Calc-Share([double]$left, [double]$reserved, [int]$pending) {
+    if ($pending -le 0) { return 0 }
+    $share = [math]::Max(0, $left - $reserved) / $pending
+    # Round down to 10 s so the numbers stay readable.
+    [math]::Floor($share / 10) * 10
+}
+
 # Share for a speaker who has not started yet: the meeting time that is left,
 # minus what the current (locked) speaker still has, split across everyone unlocked.
 function Get-Preview {
@@ -237,10 +247,7 @@ function Get-Preview {
     $reserved = 0.0
     if ($cur.Budget -gt 0) { $reserved = [math]::Max(0, $cur.Budget - (Get-Elapsed $script:Idx)) }
     $pending = @(for ($j = $script:Idx; $j -lt $script:People.Count; $j++) { if ($script:People[$j].Budget -eq 0) { $j } }).Count
-    if ($pending -eq 0) { return 0 }
-    $share = [math]::Max(0, $left - $reserved) / $pending
-    # Round down to 10 s so the numbers stay readable.
-    [math]::Floor($share / 10) * 10
+    Calc-Share $left $reserved $pending
 }
 
 function Get-Budget([int]$i) {
@@ -548,8 +555,6 @@ function Go-Next {
     }
 }
 
-function Go-Prev { Switch-To ($script:Idx - 1) }
-
 # Clears the current speaker's clock and share (e.g. after an accidental start).
 function Reset-Current {
     $wasRunning = $script:Sw.IsRunning
@@ -787,17 +792,16 @@ function Show-Settings {
 }
 
 # ---------------- controls ----------------
-$btnPrev = New-Button '이전' 'outline' 60 36 { Go-Prev }
 $btnRun  = New-Button '시작' 'primary' 92 36 { Toggle-Run }
 $btnNext = New-Button '다음' 'ink' 72 36 { Go-Next }
 $btnSet  = New-Button '설정' 'quiet' 60 36 { Show-Settings }
-$band.Controls.AddRange(@($btnPrev, $btnRun, $btnNext, $btnSet))
+$band.Controls.AddRange(@($btnRun, $btnNext, $btnSet))
 
 function Layout-Band {
     $W = $band.ClientSize.Width
     $y = [int](($band.ClientSize.Height - $btnRun.Height) / 2) + 1
     $x = S 16
-    foreach ($b in @($btnPrev, $btnRun, $btnNext)) {
+    foreach ($b in @($btnRun, $btnNext)) {
         $b.Location = New-Object Drawing.Point($x, $y)
         $x += $b.Width + (S 6)
     }
@@ -824,8 +828,6 @@ $form.add_KeyDown({
         'Space' { Toggle-Run }
         'N'     { Go-Next }
         'Right' { Go-Next }
-        'P'     { Go-Prev }
-        'Left'  { Go-Prev }
         'R'     { Reset-Current }
         'S'     { Show-Settings }
         'M'     { $script:Sound = -not $script:Sound }
