@@ -264,8 +264,8 @@ function Get-MeetingLeft { ($script:End - (Get-Date)).TotalSeconds }
 function Calc-Share([double]$left, [double]$reserved, [int]$pending, [double]$min = 0) {
     if ($pending -le 0) { return 0 }
     $share = [math]::Max(0, $left - $reserved) / $pending
-    # Round down to 10 s so the numbers stay readable.
-    [math]::Max($min, [math]::Floor($share / 10) * 10)
+    # Whole seconds: while a speaker waits to start, the share follows the clock second by second.
+    [math]::Max($min, [math]::Floor($share))
 }
 
 # Time the current (locked) speaker still has, and how many speakers have no share yet.
@@ -418,9 +418,14 @@ $script:MsgOver = '마무리해 주세요.'
 $script:MsgIdle = '배정 {0} · Space로 시작'
 $script:MsgPause = '일시정지 · Space로 계속'
 $script:MsgCritical = '곧 끝납니다. 마무리해 주세요.'
-# Width the top strip needs for a given variant: clock, plan change, end time, tail text and the gear.
+# Bottom row sizes (logical px): Start/Next buttons, then the theme and settings icons at the right edge.
+$script:RunW = 88
+$script:NextW = 64
+$script:IconW = 32
+$script:IconGap = 2
+# Width the top strip needs for a given variant: clock, plan change, end time and tail text.
 function Get-StripNeed([bool]$labels, [string]$tail) {
-    $need = (S 16) + (Measure-W '00:00' (FN 14)) + (S 12) + (S 36) + (S 4) + (S 10) + (Measure-W $tail (FK 12)) + (Measure-W '00:00' (FN 14))
+    $need = (S 16) + (Measure-W '00:00' (FN 14)) + (S 12) + (S 16) + (S 10) + (Measure-W $tail (FK 12)) + (Measure-W '00:00' (FN 14))
     # Plan change sits between the clock and the end time, with some air on both sides.
     $need += (Measure-W '+88:88' (FN 14)) + (S 24)
     if ($labels) { $need += (Measure-W '현재' (FK 12)) + (Measure-W '종료' (FK 12)) + (S 12) }
@@ -431,7 +436,7 @@ function Get-StripNeed([bool]$labels, [string]$tail) {
 # fonts, so a missing Pretendard (falls back to Malgun Gothic) still gets a safe value.
 function Get-MinClientWidth {
     $topBar = Get-StripNeed $false '초과 예상'
-    $band = (S 16) + (S 92) + (S 6) + (S 72) + (S 16)
+    $band = (S 16) + (S $script:RunW) + (S 6) + (S $script:NextW) + (S 10) + 3 * (S $script:IconW) + 2 * (S $script:IconGap) + (S 8)
     $head = (S 20) * 2 + (Measure-W '발표자 50' (FKM 16)) + (Measure-W ' / 50명' (FK 13)) + (Measure-W '시간 초과' (FKM 12)) + (S 18)
     $msgs = @($script:MsgOver, $script:MsgPause, ($script:MsgIdle -f '00:00'), $script:MsgCritical)
     $coach = (S 20) * 2 + (($msgs | ForEach-Object { Measure-W $_ (FKM 13) } | Measure-Object -Maximum).Maximum)
@@ -492,10 +497,51 @@ function Paint-Gear($g, [int]$cx, [int]$cy, $color, $bg) {
     $g.SmoothingMode = 'None'
 }
 
-# Current speaker's share minus the first plan, rounded to 10 s, with its color on the dark strip.
+function Paint-Sun($g, [int]$cx, [int]$cy, $color) {
+    $g.SmoothingMode = 'AntiAlias'
+    $pen = New-Object Drawing.Pen($color, [single](1.8 * $script:Scale))
+    $pen.StartCap = 'Round'; $pen.EndCap = 'Round'
+    for ($k = 0; $k -lt 8; $k++) {
+        $a = $k * [math]::PI / 4
+        $g.DrawLine($pen, [single]($cx + [math]::Cos($a) * (S 7.5)), [single]($cy + [math]::Sin($a) * (S 7.5)),
+                          [single]($cx + [math]::Cos($a) * (S 10)), [single]($cy + [math]::Sin($a) * (S 10)))
+    }
+    $pen.Dispose()
+    $b = New-Object Drawing.SolidBrush($color)
+    $g.FillEllipse($b, ($cx - (S 4.5)), ($cy - (S 4.5)), (S 9), (S 9))
+    $b.Dispose()
+    $g.SmoothingMode = 'None'
+}
+
+# Crescent: a disc with a second, offset disc in the background color cut out of it.
+function Paint-Moon($g, [int]$cx, [int]$cy, $color, $bg) {
+    $g.SmoothingMode = 'AntiAlias'
+    $b = New-Object Drawing.SolidBrush($color)
+    $g.FillEllipse($b, ($cx - (S 7.5)), ($cy - (S 7.5)), (S 15), (S 15))
+    $b.Dispose()
+    $b = New-Object Drawing.SolidBrush($bg)
+    $g.FillEllipse($b, ($cx - (S 7.5) + (S 5)), ($cy - (S 7.5) - (S 3.5)), (S 13), (S 13))
+    $b.Dispose()
+    $g.SmoothingMode = 'None'
+}
+
+# Hit boxes of the three icons at the bottom right: sun, moon, then the gear at the far right edge.
+function Get-IconRects {
+    $W = $band.ClientSize.Width; $H = $band.ClientSize.Height
+    $s = S $script:IconW; $gap = S $script:IconGap
+    $y = [int](($H - $s) / 2) + 1
+    $gx = $W - (S 8) - $s
+    @{
+        gear = New-Object Drawing.Rectangle($gx, $y, $s, $s)
+        moon = New-Object Drawing.Rectangle(($gx - $gap - $s), $y, $s, $s)
+        sun  = New-Object Drawing.Rectangle(($gx - 2 * ($gap + $s)), $y, $s, $s)
+    }
+}
+
+# Current speaker's share minus the first plan, in whole seconds, with its color on the dark strip.
 function Get-PlanDelta {
     $st = Get-Phase
-    $d = if ($script:Plan -gt 0) { [math]::Round(($st.Budget - $script:Plan) / 10) * 10 } else { 0 }
+    $d = if ($script:Plan -gt 0) { [math]::Round($st.Budget - $script:Plan) } else { 0 }
     if ($d -gt 0)     { [pscustomobject]@{ Text = '+' + (Fmt $d); Color = $C.Plus } }
     elseif ($d -lt 0) { [pscustomobject]@{ Text = '-' + (Fmt $d); Color = $C.Warn } }
     else              { [pscustomobject]@{ Text = '±00:00'; Color = $C.Zero } }
@@ -505,13 +551,6 @@ function Paint-Strip($g) {
     $W = $strip.ClientSize.Width; $H = $strip.ClientSize.Height
     if ($W -lt 10) { return }
     $g.Clear($C.Strip)
-
-    # Settings gear at the right edge; it also decides how much room the text gets.
-    $gw = S 36
-    $script:GearRect = New-Object Drawing.Rectangle(($W - $gw), 0, $gw, $H)
-    $gbg = if ($script:GearHot) { $C.StripHover } else { $C.Strip }
-    if ($script:GearHot) { $gb = New-Object Drawing.SolidBrush($gbg); $g.FillRectangle($gb, $script:GearRect); $gb.Dispose() }
-    Paint-Gear $g ($W - [int]($gw / 2)) ([int]($H / 2)) $(if ($script:GearHot) { $C.StripInk } else { $C.StripMute }) $gbg
 
     $left = Get-MeetingLeft
     if ($left -gt 0 -and (Test-Overbooked)) {
@@ -544,7 +583,7 @@ function Paint-Strip($g) {
     Draw-Text $g $clock (FN 14) $C.StripInk $x 0 ($clw + 2) $H
     $leftEnd = $x + $clw
 
-    $right = $W - $gw - (S 4)
+    $right = $W - (S 16)
     $tw = Measure-W $pick.Tail (FK 12)
     Draw-Text $g $pick.Tail (FK 12) $tc ($right - $tw) 0 ($tw + 2) $H
     $right -= $tw + (S 10)
@@ -639,6 +678,23 @@ function Paint-Stage($g) {
 function Paint-Band($g) {
     $g.Clear($C.Band)
     Draw-HLine $g $C.Hair 0 $band.ClientSize.Width 0
+
+    # Sun = light theme, moon = dark theme, gear = settings. The current theme's icon stays highlighted.
+    $rects = Get-IconRects
+    foreach ($k in 'sun', 'moon', 'gear') {
+        $r = $rects[$k]
+        $active = ($k -eq 'sun' -and $script:ThemeName -eq 'light') -or ($k -eq 'moon' -and $script:ThemeName -eq 'dark')
+        $hot = $script:BandHot -eq $k
+        $bg = if ($active -or $hot) { $C.Hair } else { $C.Band }
+        $fg = if ($active -or $hot) { $C.Ink } else { $C.Sub }
+        if ($active -or $hot) { Fill-Round $g $bg $r.X $r.Y $r.Width $r.Height (S 6) }
+        $cx = $r.X + [int]($r.Width / 2); $cy = $r.Y + [int]($r.Height / 2)
+        switch ($k) {
+            'sun'  { Paint-Sun $g $cx $cy $fg }
+            'moon' { Paint-Moon $g $cx $cy $fg $bg }
+            'gear' { Paint-Gear $g $cx $cy $fg $bg }
+        }
+    }
 }
 
 # ---------------- actions ----------------
@@ -875,8 +931,8 @@ function Show-Settings {
 }
 
 # ---------------- controls ----------------
-$btnRun  = New-Button '시작' 'primary' 92 36 { Toggle-Run }
-$btnNext = New-Button '다음' 'ink' 72 36 { Go-Next }
+$btnRun  = New-Button '시작' 'primary' $script:RunW 36 { Toggle-Run }
+$btnNext = New-Button '다음' 'ink' $script:NextW 36 { Go-Next }
 $band.Controls.AddRange(@($btnRun, $btnNext))
 
 # Switches the main window between the light and dark tables (the settings dialog stays light).
@@ -907,26 +963,43 @@ function Layout-Band {
 
 # ---------------- events ----------------
 $strip.add_Paint({ param($s, $e) Paint-Strip $e.Graphics })
-# The gear is painted, not a control, so hit-test it by hand.
-$script:GearRect = [Drawing.Rectangle]::Empty
-$script:GearHot = $false
-$gearTip = New-Object Windows.Forms.ToolTip
-$strip.add_MouseMove({
+# Switches theme and remembers it; used by the sun/moon icons and the D key.
+function Choose-Theme([string]$name) {
+    if ($script:ThemeName -eq $name) { return }
+    Set-Theme $name
+    try { Save-Config } catch { }
+}
+
+# The icons are painted, not controls, so hit-test them by hand.
+$script:BandHot = ''
+$script:IconTips = @{ sun = '밝은 화면'; moon = '어두운 화면'; gear = '설정 (S)' }
+$script:IconTip = New-Object Windows.Forms.ToolTip
+function Get-IconAt($pt) {
+    $rects = Get-IconRects
+    foreach ($k in 'sun', 'moon', 'gear') { if ($rects[$k].Contains($pt)) { return $k } }
+    ''
+}
+$band.add_MouseMove({
     param($s, $e)
-    $hot = $script:GearRect.Contains($e.Location)
-    if ($hot -ne $script:GearHot) {
-        $script:GearHot = $hot
-        $strip.Cursor = if ($hot) { [Windows.Forms.Cursors]::Hand } else { [Windows.Forms.Cursors]::Default }
-        $gearTip.SetToolTip($strip, $(if ($hot) { '설정 (S)' } else { '' }))
-        $strip.Invalidate()
+    $hot = Get-IconAt $e.Location
+    if ($hot -ne $script:BandHot) {
+        $script:BandHot = $hot
+        $band.Cursor = if ($hot) { [Windows.Forms.Cursors]::Hand } else { [Windows.Forms.Cursors]::Default }
+        $script:IconTip.SetToolTip($band, $(if ($hot) { $script:IconTips[$hot] } else { '' }))
+        $band.Invalidate()
     }
 })
-$strip.add_MouseLeave({
-    if ($script:GearHot) { $script:GearHot = $false; $strip.Cursor = [Windows.Forms.Cursors]::Default; $strip.Invalidate() }
+$band.add_MouseLeave({
+    if ($script:BandHot) { $script:BandHot = ''; $band.Cursor = [Windows.Forms.Cursors]::Default; $band.Invalidate() }
 })
-$strip.add_MouseClick({
+$band.add_MouseClick({
     param($s, $e)
-    if ($e.Button -eq 'Left' -and $script:GearRect.Contains($e.Location)) { Show-Settings }
+    if ($e.Button -ne 'Left') { return }
+    switch (Get-IconAt $e.Location) {
+        'sun'  { Choose-Theme 'light' }
+        'moon' { Choose-Theme 'dark' }
+        'gear' { Show-Settings }
+    }
 })
 $stage.add_Paint({ param($s, $e) Paint-Stage $e.Graphics })
 $band.add_Paint({ param($s, $e) Paint-Band $e.Graphics })
@@ -949,7 +1022,7 @@ $form.add_KeyDown({
         'Right' { Go-Next }
         'R'     { Reset-Current }
         'S'     { Show-Settings }
-        'D'     { Set-Theme $(if ($script:ThemeName -eq 'dark') { 'light' } else { 'dark' }); try { Save-Config } catch { } }
+        'D'     { Choose-Theme $(if ($script:ThemeName -eq 'dark') { 'light' } else { 'dark' }) }
         'M'     { $script:Sound = -not $script:Sound }
         default { return }
     }
