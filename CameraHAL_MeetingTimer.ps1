@@ -10,7 +10,7 @@
 #
 # Visual style follows the HP-inspired DESIGN.md (getdesign.md/hp): white canvas,
 # #1a1a1a ink, a single #024ad8 accent, 4px buttons, 1px hairlines.
-# Launch with CameraHAL_MeetingTimer.bat (STA is required for the clipboard).
+# Launch with CameraHAL_MeetingTimer.bat (WinForms needs a single-threaded apartment, hence -STA).
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -127,7 +127,8 @@ $C = @{
     Primary      = Col '#024ad8'
     PrimaryHover = Col '#0340b8'
     PrimaryDeep  = Col '#0e3191'
-    Ink          = Col '#1a1a1a'
+    PrimaryTint  = Col '#8fb4ff'
+    Ink         = Col '#1a1a1a'
     InkSoft      = Col '#292929'
     Black        = Col '#000000'
     Charcoal     = Col '#3d3d3d'
@@ -390,9 +391,11 @@ $script:MsgOver = '마무리해 주세요.'
 $script:MsgIdle = '배정 {0} · Space로 시작'
 $script:MsgPause = '일시정지 · Space로 계속'
 $script:MsgCritical = '곧 끝납니다. 마무리해 주세요.'
-# Width the top strip needs for a given variant: clock, end time, tail text and the gear.
+# Width the top strip needs for a given variant: clock, plan change, end time, tail text and the gear.
 function Get-StripNeed([bool]$labels, [string]$tail) {
     $need = (S 16) + (Measure-W '00:00' (FN 14)) + (S 12) + (S 36) + (S 4) + (S 10) + (Measure-W $tail (FK 12)) + (Measure-W '00:00' (FN 14))
+    # Plan change sits between the clock and the end time, with some air on both sides.
+    $need += (Measure-W '+88:88' (FN 14)) + (S 24)
     if ($labels) { $need += (Measure-W '현재' (FK 12)) + (Measure-W '종료' (FK 12)) + (S 12) }
     $need
 }
@@ -462,6 +465,15 @@ function Paint-Gear($g, [int]$cx, [int]$cy, $color, $bg) {
     $g.SmoothingMode = 'None'
 }
 
+# Current speaker's share minus the first plan, rounded to 10 s, with its color on the dark strip.
+function Get-PlanDelta {
+    $st = Get-Phase
+    $d = if ($script:Plan -gt 0) { [math]::Round(($st.Budget - $script:Plan) / 10) * 10 } else { 0 }
+    if ($d -gt 0)     { [pscustomobject]@{ Text = '+' + (Fmt $d); Color = $C.PrimaryTint } }
+    elseif ($d -lt 0) { [pscustomobject]@{ Text = '-' + (Fmt $d); Color = $C.Coral } }
+    else              { [pscustomobject]@{ Text = '±00:00'; Color = $C.Graphite } }
+}
+
 function Paint-Strip($g) {
     $W = $strip.ClientSize.Width; $H = $strip.ClientSize.Height
     if ($W -lt 10) { return }
@@ -500,7 +512,10 @@ function Paint-Strip($g) {
         Draw-Text $g '현재' (FK 12) $C.Steel $x 0 ($lw + 2) $H
         $x += $lw + (S 6)
     }
-    Draw-Text $g ((Get-Date).ToString('HH:mm')) (FN 14) $C.White $x 0 (S 60) $H
+    $clock = (Get-Date).ToString('HH:mm')
+    $clw = Measure-W $clock (FN 14)
+    Draw-Text $g $clock (FN 14) $C.White $x 0 ($clw + 2) $H
+    $leftEnd = $x + $clw
 
     $right = $W - $gw - (S 4)
     $tw = Measure-W $pick.Tail (FK 12)
@@ -508,11 +523,19 @@ function Paint-Strip($g) {
     $right -= $tw + (S 10)
     $ew = Measure-W $script:End.ToString('HH:mm') (FN 14)
     Draw-Text $g $script:End.ToString('HH:mm') (FN 14) $C.White ($right - $ew) 0 ($ew + 2) $H
+    $rightStart = $right - $ew
     if ($pick.Labels) {
         $right -= $ew + (S 6)
         $kw = Measure-W '종료' (FK 12)
         Draw-Text $g '종료' (FK 12) $C.Steel ($right - $kw) 0 ($kw + 2) $H
+        $rightStart = $right - $kw
     }
+
+    # Change versus the first plan, centered between the clock and the end time.
+    $pd = Get-PlanDelta
+    $dw = Measure-W $pd.Text (FN 14)
+    $mid = [int](($leftEnd + $rightStart) / 2)
+    Draw-Text $g $pd.Text (FN 14) $pd.Color ($mid - [int]($dw / 2)) 0 ($dw + 2) $H
 }
 
 function Paint-Stage($g) {
@@ -545,14 +568,7 @@ function Paint-Stage($g) {
     [void](Draw-PillRight $g $bt (FKM 12) $bf $bc $bb ($W - $pad) (S 15) (S 24))
 
     # Countdown digits
-    # Change versus the first plan, right above the digits: + is accent blue, - is coral.
-    $delta = if ($script:Plan -gt 0) { [math]::Round(($st.Budget - $script:Plan) / 10) * 10 } else { 0 }
-    if ($delta -gt 0)     { $dt = '+' + (Fmt $delta); $dcol = if ($isOver) { $C.White } else { $C.Primary } }
-    elseif ($delta -lt 0) { $dt = '-' + (Fmt $delta); $dcol = if ($isOver) { $C.Rose } else { $C.Coral } }
-    else                  { $dt = '±00:00'; $dcol = $sub }
-    Draw-Text $g $dt (FKM 14) $dcol $pad (S 38) $cw (S 22) 'Center'
-
-    $top = S 60
+    $top = S 40
     $bottom = $H - (S 58)
     $dh = [math]::Max((S 30), $bottom - $top)
     $px = [math]::Max(20, [math]::Min($dh * 0.82, $W / 3.5))
@@ -604,6 +620,8 @@ function Refresh-All {
     $st = Get-Phase
     $btnRun.Text = switch ($st.Run) { 'run' { '일시정지' } 'pause' { '계속' } default { '시작' } }
     $btnNext.Text = if ($script:Idx -ge $script:People.Count - 1) { '종료' } else { '다음' }
+    # Next/finish only make sense once this speaker has started.
+    $btnNext.Visible = $script:People[$script:Idx].Budget -gt 0
     # The title doubles as the taskbar label while minimized.
     $form.Text = '{0} · 발표자 {1}/{2} · CameraHAL_MeetingTimer' -f $st.Text, ($script:Idx + 1), $script:People.Count
     $strip.Invalidate()
@@ -650,10 +668,12 @@ function Toggle-Run {
 }
 
 function Go-Next {
+    # Same rule as the button (also covers N and the right arrow): the speaker must have started.
+    if ($script:People[$script:Idx].Budget -eq 0) { return }
     if ($script:Idx -ge $script:People.Count - 1) {
+        # Finishing ends the meeting: no summary, go straight to a fresh one.
         Commit-Current
-        Refresh-All
-        Show-Summary
+        Start-Over
     } else {
         Switch-To ($script:Idx + 1)
     }
@@ -696,109 +716,6 @@ function Start-Over {
 function Place-Corner {
     $wa = [Windows.Forms.Screen]::FromControl($form).WorkingArea
     $form.Location = New-Object Drawing.Point(($wa.Right - $form.Width - (S 16)), ($wa.Bottom - $form.Height - (S 16)))
-}
-
-# ---------------- summary ----------------
-function Get-Summary {
-    $lines = New-Object System.Collections.Generic.List[string]
-    $lines.Add(('CameraHAL 주간 미팅 발언 시간 ({0}, 종료 {1})' -f (Get-Date -Format 'yyyy-MM-dd'), $script:End.ToString('HH:mm')))
-    $lines.Add('')
-    $total = 0.0; $overCount = 0
-    for ($i = 0; $i -lt $script:People.Count; $i++) {
-        $el = Get-Elapsed $i
-        $b = $script:People[$i].Budget
-        $total += $el
-        $line = '발표자 {0}  {1}' -f ($i + 1), (Fmt $el)
-        if ($b -gt 0) { $line += ' / 배정 {0}' -f (Fmt $b) }
-        if ($b -gt 0 -and $el -gt $b) { $line += '  (+{0} 초과)' -f (Fmt ($el - $b)); $overCount++ }
-        $lines.Add($line)
-    }
-    $lines.Add('')
-    $lines.Add(('총 {0} / 시간 초과 {1}명' -f (Fmt $total), $overCount))
-    $lines -join "`r`n"
-}
-
-function Paint-SummaryRows($g) {
-    $W = $script:SumCanvas.ClientSize.Width
-    $g.Clear($C.White)
-    $rowH = S 36
-    for ($i = 0; $i -lt $script:People.Count; $i++) {
-        $y = $i * $rowH
-        $el = Get-Elapsed $i
-        $b = $script:People[$i].Budget
-        $t = Fmt $el
-        $tw = Measure-W $t (FN 14)
-        Draw-Text $g $t (FN 14) $C.Ink ($W - $tw) $y ($tw + 2) $rowH
-        $right = $W - $tw - (S 8)
-        if ($b -gt 0) {
-            $bt = '/ {0}' -f (Fmt $b)
-            $bw = Measure-W $bt (FK 12)
-            Draw-Text $g $bt (FK 12) $C.Graphite ($right - $bw) $y ($bw + 2) $rowH
-            $right -= $bw + (S 10)
-        }
-        if ($b -gt 0 -and $el -gt $b) {
-            $ot = '+' + (Fmt ($el - $b))
-            $ow = (Measure-W $ot (FN 12)) + (S 12)
-            $oy = $y + [int](($rowH - (S 22)) / 2)
-            Fill-Round $g $C.Coral ($right - $ow) $oy $ow (S 22) (S 3)
-            Draw-Text $g $ot (FN 12) $C.White ($right - $ow) $oy $ow (S 22) 'Center'
-        }
-        Draw-Text $g ('발표자 {0}' -f ($i + 1)) (FK 14) $C.Ink 0 $y (S 120) $rowH
-        Draw-HLine $g $C.Fog 0 $W ($y + $rowH - 1)
-    }
-}
-
-function Show-Summary {
-    $total = 0.0; $overCount = 0
-    for ($i = 0; $i -lt $script:People.Count; $i++) {
-        $el = Get-Elapsed $i; $total += $el
-        $b = $script:People[$i].Budget
-        if ($b -gt 0 -and $el -gt $b) { $overCount++ }
-    }
-    $script:SumText = Get-Summary
-    $rowsH = [math]::Min((S 400), (S 36) * $script:People.Count)
-
-    $dlg = New-Object Windows.Forms.Form
-    $dlg.Text = 'CameraHAL_MeetingTimer'
-    $dlg.ClientSize = New-Object Drawing.Size((S 380), ((S 172) + $rowsH))
-    $dlg.StartPosition = 'CenterScreen'
-    $dlg.FormBorderStyle = 'FixedDialog'
-    $dlg.MaximizeBox = $false
-    $dlg.MinimizeBox = $false
-    $dlg.TopMost = $true
-    $dlg.BackColor = $C.White
-    $dlg.KeyPreview = $true
-    $dlg.add_KeyDown({ param($s, $e) if ($e.KeyCode -eq 'Escape' -or $e.KeyCode -eq 'Enter') { $s.Close() } })
-
-    $title = New-Object Windows.Forms.Label
-    $title.Text = '미팅 결과'
-    $title.Font = FKM 22
-    $title.ForeColor = $C.Ink
-    $title.SetBounds((S 24), (S 20), (S 332), (S 34))
-
-    $sub = New-Object Windows.Forms.Label
-    $sub.Text = '총 {0} · 시간 초과 {1}명 · 종료 {2}' -f (Fmt $total), $overCount, $script:End.ToString('HH:mm')
-    $sub.Font = FK 13
-    $sub.ForeColor = $C.Graphite
-    $sub.SetBounds((S 24), (S 56), (S 332), (S 22))
-
-    $script:SumCanvas = New-Object MtCanvas
-    $script:SumCanvas.SetBounds((S 24), (S 92), (S 332), $rowsH)
-    $script:SumCanvas.add_Paint({ param($s, $e) Paint-SummaryRows $e.Graphics })
-
-    $btnY = (S 112) + $rowsH
-    $script:SumCopy = New-Button '결과 복사' 'primary' 108 40 {
-        [Windows.Forms.Clipboard]::SetText($script:SumText)
-        $script:SumCopy.Text = '복사됨'
-    }
-    $script:SumCopy.Location = New-Object Drawing.Point((S 248), $btnY)
-    $close = New-Button '닫기' 'outline' 84 40 { $script:SumDlg.Close() }
-    $close.Location = New-Object Drawing.Point((S 156), $btnY)
-
-    $dlg.Controls.AddRange(@($title, $sub, $script:SumCanvas, $close, $script:SumCopy))
-    $script:SumDlg = $dlg
-    [void]$dlg.ShowDialog($form)
-    $dlg.Dispose()
 }
 
 # ---------------- settings ----------------
