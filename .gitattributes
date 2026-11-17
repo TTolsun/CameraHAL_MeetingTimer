@@ -6,3 +6,4 @@
 # Keep repo housekeeping files out of release zips (git archive).
 .gitattributes export-ignore
 .gitignore     export-ignore
+CLAUDE.md      export-ignore
