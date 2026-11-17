@@ -1,69 +1,57 @@
 # CameraHAL_MeetingTimer
 
-A small always-on-top speaker timer for the weekly CameraHAL meeting. It splits
-the remaining meeting time evenly across the speakers and makes overruns
-visible to everyone.
+CameraHAL 주간 미팅에서 쓰는 작은 발표 타이머입니다. 남은 회의 시간을 발표자 수만큼 똑같이 나누고, 누가 시간을 넘겼는지 모두가 볼 수 있게 보여 줍니다. 창은 항상 다른 창 위에 표시됩니다.
 
-Runs on Windows 10/11 with the built-in Windows PowerShell 5.1. Nothing to install.
+Windows 10/11에 기본으로 들어 있는 Windows PowerShell 5.1로 동작하므로, 따로 설치할 것은 없습니다.
 
-## Run
+## 실행 방법
 
-Double-click `CameraHAL_MeetingTimer.bat`.
+`CameraHAL_MeetingTimer.bat`을 더블클릭합니다.
 
-The window opens in the bottom-right corner of the screen.
+창은 화면 오른쪽 아래 구석에 뜹니다.
 
-## How it works
+> **Release에서 zip으로 내려받은 경우**
+> Windows는 인터넷에서 받은 스크립트의 실행을 막습니다. 압축을 풀기 **전에** zip 파일을 우클릭하고 **속성 → 일반 탭 아래쪽의 "차단 해제"** 를 체크한 뒤 확인을 누르세요. 이미 압축을 풀었다면, 내용을 확인한 다음 그 폴더에서 아래 명령을 실행하면 됩니다.
+>
+> ```powershell
+> Unblock-File .\CameraHAL_MeetingTimer.ps1
+> ```
 
-- **Meeting end** defaults to the next full hour after launch
-  (start at 14:05, end at 15:00). Change it in **Settings**.
-- **Speakers**: enter only the number of speakers. The time left until the
-  meeting end is split evenly among everyone who has not started yet.
-- Each speaker's share is **locked when they start**. If someone runs over,
-  the people still waiting get less time.
-- Display escalates as time runs out: black digits, then blue near the end,
-  then red, then a flashing red screen with the overtime (`+01:20`).
-- If time runs out while the window is minimized or behind other windows,
-  its **taskbar button flashes** until the window is brought back.
-- After the last speaker, **Finish** shows each speaker's used / allotted /
-  overtime and can copy the result to the clipboard.
+## 동작 방식
 
-## Keyboard shortcuts
+- **회의 종료 시각**의 기본값은 프로그램을 실행한 시각의 다음 정각입니다(14:05에 실행하면 15:00). **설정**에서 바꿀 수 있습니다.
+- **발표자 수**만 입력하면 됩니다. 종료 시각까지 남은 시간을, 아직 발표를 시작하지 않은 사람 수로 똑같이 나눕니다.
+- 각 발표자의 배정 시간은 **그 사람이 시작하는 순간 확정**됩니다. 따라서 앞사람이 시간을 넘기면, 아직 시작하지 않은 사람들의 몫이 그만큼 줄어듭니다.
+- 시간이 줄어들수록 화면이 단계적으로 바뀝니다. 평소에는 검은 숫자이고, 마감이 가까워지면 파란 숫자, 거의 끝나면 빨간 숫자가 됩니다. 시간을 넘기면 화면 전체가 빨간색으로 깜빡이며 초과 시간(`+01:20`)을 보여 줍니다.
+- 창이 최소화되어 있거나 다른 창 뒤에 있을 때 시간이 끝나면, **작업표시줄 버튼이 깜빡입니다.** 창을 다시 띄우면 깜빡임이 멈춥니다.
+- 마지막 발표자에서 **종료**를 누르면 발표자별 사용 시간, 배정 시간, 초과 시간을 보여 주고, 결과를 클립보드로 복사할 수 있습니다.
 
-| Key | Action |
+## 단축키
+
+| 키 | 동작 |
 |---|---|
-| `Space` | Start / pause |
-| `N` or `→` | Next speaker |
-| `P` or `←` | Previous speaker |
-| `R` | Reset the current speaker's time |
-| `S` | Settings |
-| `M` | Sound on/off |
+| `Space` | 시작 / 일시정지 |
+| `N` 또는 `→` | 다음 발표자 |
+| `P` 또는 `←` | 이전 발표자 |
+| `R` | 현재 발표자의 시간 초기화 |
+| `S` | 설정 |
+| `M` | 알림음 켜기/끄기 |
 
-## Files
+## 파일 구성
 
-| File | Purpose |
+| 파일 | 용도 |
 |---|---|
-| `CameraHAL_MeetingTimer.bat` | Launcher (hides the PowerShell console) |
-| `CameraHAL_MeetingTimer.ps1` | The timer (WinForms UI) |
-| `config.json` | Saved settings, created on first run (not tracked by git) |
+| `CameraHAL_MeetingTimer.bat` | 실행 파일(PowerShell 콘솔 창을 숨기고 타이머를 띄웁니다) |
+| `CameraHAL_MeetingTimer.ps1` | 타이머 본체(WinForms 화면) |
+| `config.json` | 저장된 설정입니다. 처음 실행할 때 만들어지며, git에는 올리지 않습니다 |
 
-## Security notes
+## 보안 사항
 
-- No network access, no admin rights, no registry changes, no downloads.
-- The launcher calls `conhost.exe` and `powershell.exe` by full system path,
-  so a planted executable in the same folder cannot be picked up instead.
-- PowerShell runs with `-ExecutionPolicy RemoteSigned` for this process only.
-  A copy received by email or download is blocked until it is signed or
-  explicitly unblocked after review:
+- 네트워크 통신, 관리자 권한, 레지스트리 변경, 파일 다운로드를 사용하지 않습니다.
+- 실행 파일은 `conhost.exe`와 `powershell.exe`를 시스템 전체 경로로 호출합니다. 따라서 같은 폴더에 같은 이름의 가짜 실행 파일이 있어도 그것이 대신 실행되지 않습니다.
+- PowerShell은 이 프로세스에 한해서만 `-ExecutionPolicy RemoteSigned`로 실행됩니다. 메일이나 다운로드로 받은 사본은 서명되어 있거나, 내용을 확인한 뒤 직접 차단을 해제해야 실행됩니다.
+- `config.json`은 신뢰할 수 없는 데이터로 취급합니다. 크기를 제한하고, JSON 객체만 받으며, 모든 값의 타입과 범위를 검사합니다. 예상과 다른 값이 있으면 기본값을 사용합니다.
 
-  ```powershell
-  Unblock-File .\CameraHAL_MeetingTimer.ps1
-  ```
+## 디자인
 
-- `config.json` is read as untrusted data: size-capped, JSON object only,
-  every field type- and range-checked, defaults on anything unexpected.
-
-## Design
-
-Visual style follows the HP-inspired DESIGN.md at
-[getdesign.md/hp](https://getdesign.md/hp/design-md): white canvas, `#1a1a1a`
-ink, a single `#024ad8` accent, 4px buttons, 1px hairlines.
+화면 스타일은 [getdesign.md/hp](https://getdesign.md/hp/design-md)의 HP 스타일 DESIGN.md를 따릅니다. 흰 배경, `#1a1a1a` 잉크색 텍스트, 포인트 색상 `#024ad8` 한 가지, 4px 라운드 버튼, 1px 구분선을 사용합니다.
