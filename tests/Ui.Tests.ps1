@@ -124,6 +124,7 @@ try {
     $workingArea = [Windows.Forms.Screen]::FromControl($form).WorkingArea
     Assert ($script:BarEdge -eq 'bottom' -and $form.Bottom -eq $workingArea.Bottom) 'Default bar docks above the taskbar at the bottom'
     Assert $form.TopMost 'Presenter mode remains on top'
+    foreach ($button in $barButtons) { Assert (-not [string]::IsNullOrEmpty($button.Glyph)) 'Presenter actions have icons and retain native text for accessibility' }
     $centerX = [int](($workingArea.Left + $workingArea.Right) / 2)
     $centerY = [int](($workingArea.Top + $workingArea.Bottom) / 2)
     foreach ($drop in @(
@@ -203,6 +204,20 @@ try {
             if ($RenderDirectory) { Save-MainRender ($theme + '-bar-' + $edge) }
             Set-BarMode $false
         }
+        Fresh
+        $script:BarEdge = 'bottom'
+        Set-BarMode $true
+        $compactWidth = $form.Width
+        if ($RenderDirectory) { Save-MainRender ($theme + '-bar-compact') }
+        $script:People[0].Started = $true
+        $script:People[0].Budget = 100
+        $script:People[0].Used = 70
+        $script:Sw.Restart()
+        Refresh-All
+        Assert ($form.Width -gt $compactWidth) 'Warning automatically widens a compact bar'
+        if ($RenderDirectory) { Save-MainRender ($theme + '-bar-notice') }
+        Set-BarMode $false
+        $script:Sw.Stop()
         $critical = [pscustomobject]@{ Level = 'critical'; Run = 'run'; El = 90.0 }
         $first = Get-ProgressColor $critical
         $critical.El = 90.5

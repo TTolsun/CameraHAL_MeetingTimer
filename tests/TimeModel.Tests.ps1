@@ -242,7 +242,7 @@ $script:BarH = 52
 $script:BarW = 180
 $script:BarEdge = 'bottom'
 $bar = Get-BarBounds (New-Object Drawing.Rectangle(1920, 0, 1920, 1040))
-Check 'bar spans the full width along the bottom' ("{0},{1},{2}" -f $bar.X, $bar.Y, $bar.Width) '1920,988,1920'
+Check 'compact bar is centered along the bottom' ("{0},{1},{2}" -f $bar.X, $bar.Y, $bar.Width) '2665,988,430'
 Check 'bar height' $bar.Height 52
 
 # ---------------- config (untrusted input) ----------------
@@ -270,7 +270,7 @@ foreach ($edge in @('top','bottom','left','right')) {
     $bounds = Get-BarBounds $screenArea $edge
     Check "$edge dock stays within monitor" ($screenArea.Contains($bounds)) $true
 }
-Check 'left dock width' (Get-BarBounds $screenArea 'left').Width 180
+Check 'left dock width' (Get-BarBounds $screenArea 'left').Width 128
 Check 'right dock aligns with screen edge' (Get-BarBounds $screenArea 'right').Right $screenArea.Right
 foreach ($case in @(
     @(-1000, -100, 'top'), @(-1000, 940, 'bottom'),
@@ -280,7 +280,9 @@ foreach ($case in @(
 }
 $script:Scale = 2.0
 Check 'dock scales height for high DPI' (Get-BarBounds $screenArea 'bottom').Height 104
-Check 'dock scales vertical width for high DPI' (Get-BarBounds $screenArea 'right').Width 360
+Check 'dock scales vertical width for high DPI' (Get-BarBounds $screenArea 'right').Width 256
+Check 'warning bar is wider than normal' ((Get-BarBounds $screenArea 'bottom' $true).Width -gt (Get-BarBounds $screenArea 'bottom' $false).Width) $true
+Check 'warning side bar is wider than normal' ((Get-BarBounds $screenArea 'left' $true).Width -gt (Get-BarBounds $screenArea 'left' $false).Width) $true
 $script:Scale = 1.0
 
 New-Meeting 3

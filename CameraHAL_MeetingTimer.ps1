@@ -77,6 +77,7 @@ public class MtCanvas : Panel {
 public class MtButton : Button {
     public Color Fill = Color.White, Fore = Color.Black, Border = Color.Empty, HoverFill = Color.Empty, PressFill = Color.Empty;
     public Color PaintCanvas = Color.Empty;
+    public string Glyph = "";
     public int Radius = 4;
     private bool hover, press;
 
@@ -116,14 +117,54 @@ public class MtButton : Button {
             if (Border != Color.Empty) using (Pen pen = new Pen(Border, 1f)) g.DrawPath(pen, p);
         }
         g.SmoothingMode = SmoothingMode.None;
-        TextRenderer.DrawText(g, Text, Font, ClientRectangle, Enabled ? Fore : SystemColors.GrayText,
-            TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter |
-            TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
+        Color ink = Enabled ? Fore : SystemColors.GrayText;
+        if (String.IsNullOrEmpty(Glyph)) {
+            TextRenderer.DrawText(g, Text, Font, ClientRectangle, ink,
+                TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter |
+                TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
+        } else {
+            DrawGlyph(g, ink);
+        }
         if (Focused && ShowFocusCues) {
             Rectangle focus = ClientRectangle;
             focus.Inflate(-5, -5);
             ControlPaint.DrawFocusRectangle(g, focus, Fore, f);
         }
+    }
+
+    private void DrawGlyph(Graphics g, Color ink) {
+        float x = Width / 2f, y = Height / 2f, r = Math.Min(Width, Height) * 0.23f;
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        using (Pen pen = new Pen(ink, Math.Max(1.5f, Height / 18f)))
+        using (SolidBrush brush = new SolidBrush(ink)) {
+            pen.StartCap = LineCap.Round;
+            pen.EndCap = LineCap.Round;
+            switch (Glyph) {
+                case "play":
+                    g.FillPolygon(brush, new PointF[] { new PointF(x-r*0.65f,y-r), new PointF(x+r,y), new PointF(x-r*0.65f,y+r) });
+                    break;
+                case "pause":
+                    g.FillRectangle(brush, x-r, y-r, r*0.65f, r*2);
+                    g.FillRectangle(brush, x+r*0.35f, y-r, r*0.65f, r*2);
+                    break;
+                case "next":
+                    g.FillPolygon(brush, new PointF[] { new PointF(x-r,y-r), new PointF(x+r*0.45f,y), new PointF(x-r,y+r) });
+                    g.DrawLine(pen, x+r, y-r, x+r, y+r);
+                    break;
+                case "stop":
+                    g.FillRectangle(brush, x-r, y-r, r*2, r*2);
+                    break;
+                case "undo":
+                    g.DrawArc(pen, x-r, y-r*0.3f, r*2, r*1.3f, 180, 250);
+                    g.FillPolygon(brush, new PointF[] { new PointF(x-r*1.2f,y+r*0.35f), new PointF(x-r*0.4f,y-r*0.25f), new PointF(x-r*0.4f,y+r*0.95f) });
+                    break;
+                case "window":
+                    g.DrawRectangle(pen, x-r, y-r*0.8f, r*2, r*1.6f);
+                    g.DrawLine(pen, x-r, y-r*0.25f, x+r, y-r*0.25f);
+                    break;
+            }
+        }
+        g.SmoothingMode = SmoothingMode.None;
     }
 }
 '@
@@ -593,19 +634,19 @@ function Paint-Bar($g) {
     $dc = Get-ProgressColor $st $true
     $msg = Get-BarMessage $st
     if ($vertical) {
-        Draw-Text $g ('발표자 {0} / {1}명' -f ($script:Idx + 1), $script:People.Count) (FKM 15) $fg $pad (S 20) ($W - 2 * $pad) (S 28) 'Center'
+        Draw-Text $g ('{0} / {1}명' -f ($script:Idx + 1), $script:People.Count) (FKM 15) $fg $pad (S 20) ($W - 2 * $pad) (S 28) 'Center'
         $digitTop = [math]::Min((S 104), [int]($H * 0.2))
         $digitPx = [math]::Min((S 44), $W / 4)
         while ((Measure-W $st.Text (Font-Px $famNum $digitPx $numStyle)) -gt ($W - 2 * $pad) -and $digitPx -gt (S 16)) { $digitPx -= 1 }
         Draw-Text $g $st.Text (Font-Px $famNum $digitPx $numStyle) $dc $pad $digitTop ($W - 2 * $pad) (S 64) 'Center'
         $messageRect = New-Object Drawing.Rectangle($pad, ($digitTop + (S 76)), ($W - 2 * $pad), (S 76))
         [Windows.Forms.TextRenderer]::DrawText($g, $msg, (FKM 13), $messageRect, $fg, [Windows.Forms.TextFormatFlags]'WordBreak, HorizontalCenter, VerticalCenter, NoPadding')
-        Draw-Text $g '드래그로 위치 이동' (FK 11) $sub $pad (S 54) ($W - 2 * $pad) (S 20) 'Center'
+        Draw-Text $g '드래그로 이동' (FK 11) $sub $pad (S 54) ($W - 2 * $pad) (S 20) 'Center'
     } else {
-        $compact = $W -lt (S 850)
-        $headW = if ($compact) { S 90 } else { S 140 }
-        $clockW = if ($compact) { S 120 } else { S 160 }
-        $head = if ($compact) { '{0} / {1}명' -f ($script:Idx + 1), $script:People.Count } else { '발표자 {0} / {1}명' -f ($script:Idx + 1), $script:People.Count }
+        $pad = S 12
+        $headW = S 72
+        $clockW = S 124
+        $head = '{0} / {1}명' -f ($script:Idx + 1), $script:People.Count
         Draw-Text $g $head (FKM 15) $fg $pad 0 $headW ($H - (S 4))
         Draw-Text $g $st.Text (FN 32) $dc ($pad + $headW) 0 $clockW ($H - (S 4)) 'Center'
         $messageX = $pad + $headW + $clockW + (S 12)
@@ -633,15 +674,15 @@ function Paint-Bar($g) {
 function Get-BarMessage($state) {
     if ($state.Run -eq 'pause') {
         if ($state.Level -eq 'over') { return '시간 초과 · 일시정지' }
-        return '일시정지 · 계속을 눌러 주세요'
+        return '일시정지'
     }
     switch ($state.Level) {
         'over' { return $script:MsgOver }
         'critical' { return $script:MsgCritical }
         'notice' { return $script:MsgNotice }
     }
-    if ($state.Run -eq 'idle') { return '시작을 눌러 주세요 · 드래그로 이동' }
-    '배정 {0} · 드래그로 이동' -f (Fmt $state.Budget)
+    if ($state.Run -eq 'idle') { return '대기' }
+    '진행 중'
 }
 
 
@@ -746,6 +787,10 @@ function Refresh-All {
     $btnUndo.Enabled = Test-UndoAllowed
     $btnBarRun.Text = $btnRun.Text
     $btnBarNext.Text = $btnNext.Text
+    $btnBarRun.Glyph = if ($script:Sw.IsRunning) { 'pause' } else { 'play' }
+    $btnBarNext.Glyph = if ($script:Idx -ge $script:People.Count - 1) { 'stop' } else { 'next' }
+    $tips.SetToolTip($btnBarRun, ($btnRun.Text + ' (Space)'))
+    $tips.SetToolTip($btnBarNext, ($btnNext.Text + ' (N / →)'))
     $btnBarNext.Enabled = $script:Sw.IsRunning
     $btnBarUndo.Enabled = Test-UndoAllowed
     $canvas = $C.Strip
@@ -756,7 +801,7 @@ function Refresh-All {
     foreach ($button in $barButtons) {
         if ($button.PaintCanvas -ne $canvas) { $button.PaintCanvas = $canvas; $button.Invalidate() }
     }
-    if ($script:BarMode) { Layout-BarControls }
+    if ($script:BarMode) { Update-BarBounds; Layout-BarControls }
     # The title doubles as the taskbar label while minimized.
     $form.Text = '{0} · 발표자 {1}/{2} · CameraHAL_MeetingTimer' -f $st.Text, ($script:Idx + 1), $script:People.Count
     $strip.Invalidate()
@@ -1109,6 +1154,8 @@ $btnBarRun = New-Button '시작' 'primary' 56 28 { Toggle-Run }
 $btnBarNext = New-Button '다음' 'ink' 48 28 { Go-Next }
 $btnBarUndo = New-Button '되돌리기' 'quiet' 64 28 { Undo-Last }
 $btnBarBack = New-Button '기본 창' 'quiet' 64 28 { Toggle-BarMode }
+$btnBarUndo.Glyph = 'undo'
+$btnBarBack.Glyph = 'window'
 $barButtons = @($btnBarRun,$btnBarNext,$btnBarUndo,$btnBarBack)
 $stage.Controls.AddRange($barButtons)
 $tab = 0
@@ -1168,21 +1215,33 @@ $stage.add_DoubleClick({ if ($script:BarMode) { Set-BarMode $false } })
 # the chosen edge of its screen, so the countdown is visible to everyone in the call.
 $script:BarMode = $false
 $script:BarH = 52
-$script:BarW = 180
+$script:BarWarning = $false
 $script:BarEdge = $script:Cfg.BarEdge
 $script:NormalBounds = $null
 $script:BarDrag = $null
 
 # WorkingArea keeps every dock position clear of the Windows taskbar.
-function Get-BarBounds($wa, [string]$edge = $script:BarEdge) {
+function Get-BarBounds($wa, [string]$edge = $script:BarEdge, [bool]$warning = ([bool]$script:BarWarning)) {
     $height = [math]::Min($wa.Height, (S $script:BarH))
-    $width = [math]::Min($wa.Width, (S $script:BarW))
+    $width = [math]::Min($wa.Width, (S $(if ($warning) { 620 } else { 430 })))
+    $sideWidth = [math]::Min($wa.Width, (S $(if ($warning) { 180 } else { 128 })))
+    $sideHeight = [math]::Min($wa.Height, (S 320))
+    $centerX = $wa.Left + [int](($wa.Width - $width) / 2)
+    $centerY = $wa.Top + [int](($wa.Height - $sideHeight) / 2)
     switch ($edge) {
-        'top' { New-Object Drawing.Rectangle($wa.Left, $wa.Top, $wa.Width, $height) }
-        'left' { New-Object Drawing.Rectangle($wa.Left, $wa.Top, $width, $wa.Height) }
-        'right' { New-Object Drawing.Rectangle(($wa.Right - $width), $wa.Top, $width, $wa.Height) }
-        default { New-Object Drawing.Rectangle($wa.Left, ($wa.Bottom - $height), $wa.Width, $height) }
+        'top' { New-Object Drawing.Rectangle($centerX, $wa.Top, $width, $height) }
+        'left' { New-Object Drawing.Rectangle($wa.Left, $centerY, $sideWidth, $sideHeight) }
+        'right' { New-Object Drawing.Rectangle(($wa.Right - $sideWidth), $centerY, $sideWidth, $sideHeight) }
+        default { New-Object Drawing.Rectangle($centerX, ($wa.Bottom - $height), $width, $height) }
     }
+}
+
+function Update-BarBounds {
+    if (-not $script:BarMode -or $script:BarDrag) { return }
+    $warning = (Get-Phase).Level -in @('notice','critical','over')
+    if ($warning -eq $script:BarWarning) { return }
+    $script:BarWarning = $warning
+    $form.Bounds = Get-BarBounds ([Windows.Forms.Screen]::FromControl($form).WorkingArea)
 }
 
 function Get-NearestBarEdge($point, $wa) {
@@ -1203,21 +1262,21 @@ function Layout-BarControls {
     if (-not $script:BarMode) { return }
     $vertical = $script:BarEdge -eq 'left' -or $script:BarEdge -eq 'right'
     if ($vertical) {
-        $y = $stage.ClientSize.Height - (S 152)
-        foreach ($button in $barButtons) {
-            $button.Size = New-Object Drawing.Size(($stage.ClientSize.Width - (S 32)), (S 28))
-            $button.Location = New-Object Drawing.Point((S 16), $y)
-            $y += S 34
+        $x = [int](($stage.ClientSize.Width - (S 72)) / 2)
+        $y = $stage.ClientSize.Height - (S 88)
+        for ($i = 0; $i -lt $barButtons.Count; $i++) {
+            $button = $barButtons[$i]
+            $button.Size = New-Object Drawing.Size((S 32), (S 32))
+            $button.Location = New-Object Drawing.Point(($x + ($i % 2) * (S 40)), ($y + [int][math]::Floor($i / 2) * (S 40)))
         }
     } else {
-        $widths = @(56,48,64,64)
-        $x = $stage.ClientSize.Width - (S 16)
+        $x = $stage.ClientSize.Width - (S 12)
         for ($i = $barButtons.Count - 1; $i -ge 0; $i--) {
             $button = $barButtons[$i]
-            $button.Size = New-Object Drawing.Size((S $widths[$i]), (S 28))
+            $button.Size = New-Object Drawing.Size((S 32), (S 32))
             $x -= $button.Width
             $button.Location = New-Object Drawing.Point($x, ([int](($stage.ClientSize.Height - $button.Height - (S 4)) / 2)))
-            $x -= S 6
+            $x -= S 4
         }
     }
 }
@@ -1236,6 +1295,7 @@ function Set-BarMode([bool]$on) {
     $script:BarDrag = $null
     $stage.Capture = $false
     $script:BarMode = $on
+    $script:BarWarning = (Get-Phase).Level -in @('notice','critical','over')
     $form.SuspendLayout()
     if ($on) {
         $script:NormalBounds = $form.Bounds
