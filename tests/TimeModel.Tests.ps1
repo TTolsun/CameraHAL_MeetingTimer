@@ -151,6 +151,12 @@ New-Meeting 3
 Go-Next
 Check 'next is ignored before the speaker starts' $script:Idx 0
 Check 'ignored next leaves no undo' ($null -eq $script:Undo) $true
+Toggle-Run; Step 100; Toggle-Run
+Go-Next
+Check 'next is ignored while paused' $script:Idx 0
+Toggle-Run
+Go-Next
+Check 'next works again once resumed' $script:Idx 1
 
 # ---------------- undo ----------------
 # Accidental Next while the speaker talks: they get the time back and keep running.
@@ -187,14 +193,29 @@ Check 'undo after finish restores the plan' $script:Plan 1800
 
 # Accidental reset, taken while paused: nothing is added for the paused gap.
 New-Meeting 6
-Toggle-Run; Step 300; Toggle-Run
+Toggle-Run; Step 100; Go-Next
+Step 300; Toggle-Run
 Reset-Current
-Check 'reset clears the share' $script:People[0].Budget 0
+Check 'reset clears the share' $script:People[1].Budget 0
 Step 20
 Undo-Last
-Check 'undo after paused reset restores time exactly' (Get-Elapsed 0) 300
+Check 'undo after paused reset restores time exactly' (Get-Elapsed 1) 300
 Check 'undo after paused reset stays paused' $script:Sw.IsRunning $false
-Check 'undo after reset restores the share' $script:People[0].Budget 600
+Check 'undo after reset restores the share' $script:People[1].Budget 700
+
+# Speaker 1 has nobody before them: Ctrl+Z there does nothing (and shows no hint).
+New-Meeting 6
+Toggle-Run; Step 300
+Reset-Current
+Check 'no undo hint on speaker 1' ([bool](Test-UndoHint)) $false
+Undo-Last
+Check 'undo is blocked on speaker 1' (Get-Elapsed 0) 0
+Check 'blocked undo keeps the snapshot' ($null -ne $script:Undo) $true
+
+# The exception: a finish lands on speaker 1 and must still be undoable (with a hint).
+New-Meeting 2
+Toggle-Run; Step 100; Go-Next; Step 100; Go-Next
+Check 'undo hint after finish' ([bool](Test-UndoHint)) $true
 
 # Reset on an untouched speaker must not overwrite a useful undo.
 # After a finish, speaker 1 of the fresh meeting is untouched, so R there is a no-op.

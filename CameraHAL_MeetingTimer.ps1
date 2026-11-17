@@ -709,8 +709,8 @@ function Refresh-All {
     $st = Get-Phase
     $btnRun.Text = switch ($st.Run) { 'run' { '일시정지' } 'pause' { '계속' } default { '시작' } }
     $btnNext.Text = if ($script:Idx -ge $script:People.Count - 1) { '종료' } else { '다음' }
-    # Next/finish only make sense once this speaker has started.
-    $btnNext.Visible = $script:People[$script:Idx].Budget -gt 0
+    # Next/finish only while the clock runs: hidden before the start and while paused.
+    $btnNext.Visible = $script:Sw.IsRunning
     # The title doubles as the taskbar label while minimized.
     $form.Text = '{0} · 발표자 {1}/{2} · CameraHAL_MeetingTimer' -f $st.Text, ($script:Idx + 1), $script:People.Count
     $strip.Invalidate()
@@ -757,10 +757,11 @@ function Toggle-Run {
 }
 
 function Go-Next {
-    # Same rule as the button (also covers N and the right arrow): the speaker must have started.
-    if ($script:People[$script:Idx].Budget -eq 0) { return }
-    Save-Undo
-    if ($script:Idx -ge $script:People.Count - 1) {
+    # Same rule as the button (also covers N and the right arrow): the clock must be running.
+    if (-not $script:Sw.IsRunning) { return }
+    $isLast = $script:Idx -ge $script:People.Count - 1
+    Save-Undo $(if ($isLast) { 'finish' } else { 'next' })
+    if ($isLast) {
         # Finishing ends the meeting: no summary, go straight to a fresh one.
         Commit-Current
         Start-Over
@@ -774,7 +775,7 @@ function Reset-Current {
     $wasRunning = $script:Sw.IsRunning
     # Nothing to clear: keep any earlier undo instead of overwriting it with a no-op.
     if (-not $wasRunning -and (Get-Elapsed $script:Idx) -eq 0 -and $script:People[$script:Idx].Budget -eq 0) { return }
-    Save-Undo
+    Save-Undo 'reset'
     $script:Sw.Reset()
     $script:People[$script:Idx] = New-Person
     if ($wasRunning) { Lock-Budget; $script:Sw.Start() }
@@ -811,19 +812,25 @@ function Start-Over {
 # finish that starts a fresh meeting) and Reset. The time that passed since then belongs to
 # the speaker who was talking, so it is given back to them if their clock was running.
 $script:Undo = $null
-function Save-Undo {
+function Save-Undo([string]$kind) {
     $copy = @($script:People | ForEach-Object { $_.PSObject.Copy() })
     # Fold the running stopwatch into the copy, the same way Commit-Current would.
     $copy[$script:Idx].Used = Get-Elapsed $script:Idx
     $script:Undo = [pscustomobject]@{
-        People = $copy; Idx = $script:Idx; End = $script:End; EndFlashed = $script:EndFlashed
+        Kind = $kind; People = $copy; Idx = $script:Idx; End = $script:End; EndFlashed = $script:EndFlashed
         Plan = $script:Plan; Running = $script:Sw.IsRunning; At = Get-Date
     }
 }
 
+# Speaker 1 has nobody before them, so Ctrl+Z does nothing there. The one exception is an
+# accidental finish: it lands on speaker 1 of a fresh meeting, and undo must bring it back.
+function Test-UndoAllowed {
+    $script:Undo -and ($script:Idx -gt 0 -or $script:Undo.Kind -eq 'finish')
+}
+
 function Undo-Last {
     $u = $script:Undo
-    if (-not $u) { return }
+    if (-not (Test-UndoAllowed)) { return }
     $script:Undo = $null
     $script:Sw.Reset()
     $script:People = $u.People
@@ -840,7 +847,7 @@ function Undo-Last {
 
 # True for a few seconds after an undoable action, so the coaching line can offer Ctrl+Z.
 function Test-UndoHint {
-    $script:Undo -and ((Get-Date) - $script:Undo.At).TotalSeconds -lt 10
+    (Test-UndoAllowed) -and ((Get-Date) - $script:Undo.At).TotalSeconds -lt 10
 }
 
 function Place-Corner {
