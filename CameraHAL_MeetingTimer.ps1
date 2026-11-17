@@ -10,7 +10,7 @@
 #
 # Visual style follows the HP-inspired DESIGN.md (getdesign.md/hp): white canvas,
 # #1a1a1a ink, a single #024ad8 accent, 4px buttons, 1px hairlines.
-# Launch with CameraHAL_MeetingTimer.bat (STA is required for the clipboard).
+# Launch with CameraHAL_MeetingTimer.bat.
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -65,17 +65,18 @@ public class MtCanvas : Panel {
     }
 }
 
-// Rounded flat button. Not selectable, so Space/N/P always reach the form's key handler.
-public class MtButton : Control {
+// Native keyboard and accessibility behavior with the timer's custom painting.
+public class MtButton : Button {
     public Color Fill = Color.White, Fore = Color.Black, Border = Color.Empty, HoverFill = Color.Empty, PressFill = Color.Empty;
     public int Radius = 4;
     private bool hover, press;
 
     public MtButton() {
-        SetStyle(ControlStyles.Selectable, false);
         SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer |
                  ControlStyles.UserPaint | ControlStyles.ResizeRedraw, true);
-        TabStop = false;
+        TabStop = true;
+        FlatStyle = FlatStyle.Flat;
+        FlatAppearance.BorderSize = 0;
         Cursor = Cursors.Hand;
     }
 
@@ -89,6 +90,8 @@ public class MtButton : Control {
     protected override void OnMouseDown(MouseEventArgs e) { press = true; Invalidate(); base.OnMouseDown(e); }
     protected override void OnMouseUp(MouseEventArgs e) { press = false; Invalidate(); base.OnMouseUp(e); }
     protected override void OnTextChanged(EventArgs e) { Invalidate(); base.OnTextChanged(e); }
+    protected override void OnGotFocus(EventArgs e) { base.OnGotFocus(e); Invalidate(); }
+    protected override void OnLostFocus(EventArgs e) { base.OnLostFocus(e); Invalidate(); }
 
     protected override void OnPaint(PaintEventArgs e) {
         Graphics g = e.Graphics;
@@ -97,15 +100,21 @@ public class MtButton : Control {
         Color f = Fill;
         if (press && PressFill != Color.Empty) f = PressFill;
         else if (hover && HoverFill != Color.Empty) f = HoverFill;
+        if (!Enabled) f = SystemColors.Control;
         RectangleF r = new RectangleF(0.5f, 0.5f, Width - 2f, Height - 2f);
         using (GraphicsPath p = MtNative.Round(r, Math.Min(Radius, Height / 2f - 1))) {
             using (SolidBrush b = new SolidBrush(f)) g.FillPath(b, p);
             if (Border != Color.Empty) using (Pen pen = new Pen(Border, 1f)) g.DrawPath(pen, p);
         }
         g.SmoothingMode = SmoothingMode.None;
-        TextRenderer.DrawText(g, Text, Font, ClientRectangle, Fore,
+        TextRenderer.DrawText(g, Text, Font, ClientRectangle, Enabled ? Fore : SystemColors.GrayText,
             TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter |
             TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
+        if (Focused && ShowFocusCues) {
+            Rectangle focus = ClientRectangle;
+            focus.Inflate(-5, -5);
+            ControlPaint.DrawFocusRectangle(g, focus, Fore, f);
+        }
     }
 }
 '@
@@ -215,6 +224,7 @@ $script:Sw = New-Object System.Diagnostics.Stopwatch
 $script:People = @()
 $script:Idx = 0
 $script:EndFlashed = $false
+$script:UndoSwitch = $null
 
 # ---------------- time helpers ----------------
 function Fmt([double]$sec) {
@@ -228,6 +238,19 @@ function Get-Elapsed([int]$i) {
 }
 
 function Get-MeetingLeft { ($script:End - (Get-Date)).TotalSeconds }
+
+function Format-End {
+    if ($script:End.Date -eq (Get-Date).Date) { $script:End.ToString('HH:mm') }
+    else { $script:End.ToString('MM/dd HH:mm') }
+}
+
+function Resolve-EndTime([datetime]$picked, [datetime]$original) {
+    if ($picked.Hour -eq $original.Hour -and $picked.Minute -eq $original.Minute) { return $original }
+    $now = Get-Date
+    $end = $now.Date.AddHours($picked.Hour).AddMinutes($picked.Minute)
+    if ($end -le $now) { $end = $end.AddDays(1) }
+    $end
+}
 
 # Pure share calculation (no clock or UI state) so it can be checked in isolation.
 # Whoever finished early leaves no reserved time, so their unused seconds flow into
@@ -246,18 +269,21 @@ function Get-Preview {
     $cur = $script:People[$script:Idx]
     $reserved = 0.0
     if ($cur.Budget -gt 0) { $reserved = [math]::Max(0, $cur.Budget - (Get-Elapsed $script:Idx)) }
-    $pending = @(for ($j = $script:Idx; $j -lt $script:People.Count; $j++) { if ($script:People[$j].Budget -eq 0) { $j } }).Count
+    $pending = @(for ($j = $script:Idx; $j -lt $script:People.Count; $j++) { if (-not $script:People[$j].Started) { $j } }).Count
     Calc-Share $left $reserved $pending
 }
 
 function Get-Budget([int]$i) {
     $b = $script:People[$i].Budget
-    if ($b -gt 0) { $b } else { Get-Preview }
+    if ($script:People[$i].Started) { $b } else { Get-Preview }
 }
 
 function Lock-Budget {
     $p = $script:People[$script:Idx]
-    if ($p.Budget -eq 0) { $p.Budget = [math]::Max(30, (Get-Preview)) }
+    if (-not $p.Started) {
+        $p.Budget = Get-Preview
+        $p.Started = $true
+    }
 }
 
 function Get-Phase {
@@ -267,14 +293,15 @@ function Get-Phase {
     # Warning points scale down for short shares.
     $noticeAt = [math]::Min(120, $budget * 0.3)
     $criticalAt = [math]::Min(60, $budget * 0.15)
-    $level = if ($rem -le 0) { 'over' } elseif ($rem -le $criticalAt) { 'critical' } elseif ($rem -le $noticeAt) { 'notice' } else { 'normal' }
-    $run = if ($script:Sw.IsRunning) { 'run' } elseif ($el -eq 0) { 'idle' } else { 'pause' }
-    $text = if ($rem -gt 0) { Fmt ([math]::Ceiling($rem)) } else { '+' + (Fmt ([math]::Floor(-$rem))) }
+    $started = $script:People[$script:Idx].Started
+    $level = if (-not $started -and $rem -le 0) { 'normal' } elseif ($rem -le 0) { 'over' } elseif ($rem -le $criticalAt) { 'critical' } elseif ($rem -le $noticeAt) { 'notice' } else { 'normal' }
+    $run = if ($script:Sw.IsRunning) { 'run' } elseif (-not $started) { 'idle' } else { 'pause' }
+    $text = if (-not $started -and $rem -le 0) { '00:00' } elseif ($rem -gt 0) { Fmt ([math]::Ceiling($rem)) } else { '+' + (Fmt ([math]::Floor(-$rem))) }
     [pscustomobject]@{ El = $el; Rem = $rem; Budget = $budget; Level = $level; Run = $run; Text = $text; NoticeAt = $noticeAt; CriticalAt = $criticalAt }
 }
 
 function New-Person {
-    [pscustomobject]@{ Used = 0.0; Budget = 0.0; W2 = $false; W1 = $false; Zero = $false; Over = 0 }
+    [pscustomobject]@{ Used = 0.0; Budget = 0.0; Started = $false; W2 = $false; W1 = $false; Zero = $false; Over = 0 }
 }
 
 function Play([string]$kind) {
@@ -410,7 +437,7 @@ function Paint-Strip($g) {
     $tw = Measure-W $tail (FK 12)
     Draw-Text $g $tail (FK 12) $tc ($right - $tw) 0 ($tw + 2) $H
     $right -= $tw + (S 10)
-    $endText = $script:End.ToString('HH:mm')
+    $endText = Format-End
     $ew = Measure-W $endText (FN 14)
     Draw-Text $g $endText (FN 14) $C.White ($right - $ew) 0 ($ew + 2) $H
     $right -= $ew + (S 6)
@@ -441,7 +468,10 @@ function Paint-Stage($g) {
     $hw = Measure-W $head (FKM 16)
     Draw-Text $g $head (FKM 16) $fg $pad (S 14) ($hw + 2) (S 26)
     Draw-Text $g (' / {0}명' -f $script:People.Count) (FK 13) $sub ($pad + $hw) (S 14) (S 80) (S 26)
-    if ($isOver)                 { $bt = '시간 초과'; $bf = $C.White; $bc = $C.Error;    $bb = $NoColor }
+    if ($isOver)                 {
+        $bt = if ($st.Run -eq 'pause') { '초과 · 일시정지' } else { '시간 초과' }
+        $bf = $C.White; $bc = $C.Error; $bb = $NoColor
+    }
     elseif ($st.Run -eq 'run')   { $bt = '진행 중';  $bf = $C.Ink;   $bc = $C.White;    $bb = $NoColor }
     elseif ($st.Run -eq 'pause') { $bt = '일시정지'; $bf = $NoColor; $bc = $C.Ink;      $bb = $C.Ink }
     else                         { $bt = '대기';     $bf = $NoColor; $bc = $C.Charcoal; $bb = $C.Steel }
@@ -457,9 +487,11 @@ function Paint-Stage($g) {
 
     # Coaching line (visible to everyone when the screen is shared)
     $mc = $sub
-    if ($isOver) { $msg = '시간이 초과되었습니다. 마무리해 주세요.'; $mc = $C.White }
-    elseif ($st.Run -eq 'idle') { $msg = '배정 {0} · Space를 누르면 시작합니다' -f (Fmt $st.Budget) }
-    elseif ($st.Run -eq 'pause') { $msg = '일시정지됨 · Space를 누르면 이어서 진행합니다' }
+    if ($isOver -and $st.Run -eq 'pause') { $msg = '일시정지됨 · 계속을 눌러 주세요'; $mc = $C.White }
+    elseif ($isOver) { $msg = '시간이 초과되었습니다. 마무리해 주세요.'; $mc = $C.White }
+    elseif ($st.Run -eq 'idle' -and $st.Budget -le 0) { $msg = '시작하면 초과 시간을 기록합니다' }
+    elseif ($st.Run -eq 'idle') { $msg = '배정 {0} · 시작을 눌러 주세요' -f (Fmt $st.Budget) }
+    elseif ($st.Run -eq 'pause') { $msg = '일시정지됨 · 계속을 눌러 주세요' }
     elseif ($st.Level -eq 'critical') { $msg = '곧 끝납니다. 마무리해 주세요.'; $mc = $C.Error }
     elseif ($st.Level -eq 'notice') { $msg = '핵심만 정리해 주세요.'; $mc = $C.Primary }
     else { $msg = '배정 {0}' -f (Fmt $st.Budget) }
@@ -500,6 +532,9 @@ function Refresh-All {
     $st = Get-Phase
     $btnRun.Text = switch ($st.Run) { 'run' { '일시정지' } 'pause' { '계속' } default { '시작' } }
     $btnNext.Text = if ($script:Idx -ge $script:People.Count - 1) { '종료' } else { '다음' }
+    $btnNext.Visible = $script:Sw.IsRunning
+    $tips.SetToolTip($btnNext, $(if ($script:Idx -ge $script:People.Count - 1) { '회의를 끝내고 새 회의 대기로 돌아갑니다 (N / →)' } else { '다음 발표자를 바로 시작합니다 (N / →)' }))
+    $btnUndo.Enabled = $null -ne $script:UndoSwitch
     # The title doubles as the taskbar label while minimized.
     $form.Text = '{0} · 발표자 {1}/{2} · CameraHAL_MeetingTimer' -f $st.Text, ($script:Idx + 1), $script:People.Count
     $strip.Invalidate()
@@ -531,9 +566,27 @@ function Commit-Current {
     $script:Sw.Reset()
 }
 
+function Confirm-Action([string]$message, [string]$title) {
+    [Windows.Forms.MessageBox]::Show($form, $message, $title, 'YesNo', 'Warning', 'Button2') -eq 'Yes'
+}
+
+function Confirm-SpeakerStart([int]$i) {
+    if ($script:People[$i].Started) { return $true }
+    if ((Get-MeetingLeft) -le 0) {
+        return (Confirm-Action "회의 종료 시각이 지났습니다.`n추가 배정 없이 초과 시간을 기록하며 계속할까요?" '회의 시간 종료')
+    }
+    $pending = @(for ($j = $i; $j -lt $script:People.Count; $j++) { if (-not $script:People[$j].Started) { $j } }).Count
+    if ((Calc-Share (Get-MeetingLeft) 0 $pending) -le 0) {
+        return (Confirm-Action "남은 배정 시간이 없습니다.`n초과 시간을 기록하며 계속할까요?" '배정 시간 없음')
+    }
+    $true
+}
+
 function Switch-To([int]$i) {
     if ($i -lt 0 -or $i -ge $script:People.Count -or $i -eq $script:Idx) { return }
     $wasRunning = $script:Sw.IsRunning
+    if ($wasRunning -and -not (Confirm-SpeakerStart $i)) { return }
+    Save-Undo
     Commit-Current
     $script:Idx = $i
     if ($wasRunning) { Lock-Budget; $script:Sw.Start() }
@@ -541,15 +594,52 @@ function Switch-To([int]$i) {
 }
 
 function Toggle-Run {
-    if ($script:Sw.IsRunning) { $script:Sw.Stop() } else { Lock-Budget; $script:Sw.Start() }
+    if ($script:Sw.IsRunning) { $script:Sw.Stop() }
+    else {
+        if (-not (Confirm-SpeakerStart $script:Idx)) { return }
+        Lock-Budget
+        $script:Sw.Start()
+    }
+    Refresh-All
+}
+
+function Save-Undo {
+    $copy = @(foreach ($person in $script:People) { $person.PSObject.Copy() })
+    $copy[$script:Idx].Used = Get-Elapsed $script:Idx
+    $script:UndoSwitch = [pscustomobject]@{
+        People = $copy
+        Idx = $script:Idx
+        End = $script:End
+        EndFlashed = $script:EndFlashed
+        WasRunning = $script:Sw.IsRunning
+        At = Get-Date
+    }
+}
+
+function Undo-Last {
+    if ($null -eq $script:UndoSwitch) { return }
+    $script:Sw.Reset()
+    $script:People = $script:UndoSwitch.People
+    $script:Idx = $script:UndoSwitch.Idx
+    $script:End = $script:UndoSwitch.End
+    $script:EndFlashed = $script:UndoSwitch.EndFlashed
+    if ($script:UndoSwitch.WasRunning) {
+        $script:People[$script:Idx].Used += [math]::Max(0, ((Get-Date) - $script:UndoSwitch.At).TotalSeconds)
+        $script:Sw.Start()
+    }
+    $script:UndoSwitch = $null
     Refresh-All
 }
 
 function Go-Next {
+    if (-not $script:Sw.IsRunning) { return }
     if ($script:Idx -ge $script:People.Count - 1) {
+        Save-Undo
+        $undo = $script:UndoSwitch
         Commit-Current
+        Start-Over
+        $script:UndoSwitch = $undo
         Refresh-All
-        Show-Summary
     } else {
         Switch-To ($script:Idx + 1)
     }
@@ -557,16 +647,20 @@ function Go-Next {
 
 # Clears the current speaker's clock and share (e.g. after an accidental start).
 function Reset-Current {
+    if ($script:People[$script:Idx].Started -and -not (Confirm-Action '현재 발표자의 사용 시간과 배정 시간을 지울까요?' '현재 발표자 초기화')) { return }
+    if (-not $script:People[$script:Idx].Started) { return }
+    Save-Undo
     $wasRunning = $script:Sw.IsRunning
     $script:Sw.Reset()
     $script:People[$script:Idx] = New-Person
-    if ($wasRunning) { Lock-Budget; $script:Sw.Start() }
+    if ($wasRunning -and (Get-Preview) -gt 0) { Lock-Budget; $script:Sw.Start() }
     Refresh-All
 }
 
 function Set-Count([int]$n) {
     $n = [math]::Max(1, [math]::Min(50, $n))
     if ($n -eq $script:People.Count) { return }
+    $script:UndoSwitch = $null
     $wasRunning = $script:Sw.IsRunning
     Commit-Current
     $list = New-Object System.Collections.Generic.List[object]
@@ -585,115 +679,13 @@ function Start-Over {
     $script:Idx = 0
     $script:End = Get-NextHour
     $script:EndFlashed = $false
+    $script:UndoSwitch = $null
     Refresh-All
 }
 
 function Place-Corner {
     $wa = [Windows.Forms.Screen]::FromControl($form).WorkingArea
     $form.Location = New-Object Drawing.Point(($wa.Right - $form.Width - (S 16)), ($wa.Bottom - $form.Height - (S 16)))
-}
-
-# ---------------- summary ----------------
-function Get-Summary {
-    $lines = New-Object System.Collections.Generic.List[string]
-    $lines.Add(('CameraHAL 주간 미팅 발언 시간 ({0}, 종료 {1})' -f (Get-Date -Format 'yyyy-MM-dd'), $script:End.ToString('HH:mm')))
-    $lines.Add('')
-    $total = 0.0; $overCount = 0
-    for ($i = 0; $i -lt $script:People.Count; $i++) {
-        $el = Get-Elapsed $i
-        $b = $script:People[$i].Budget
-        $total += $el
-        $line = '발표자 {0}  {1}' -f ($i + 1), (Fmt $el)
-        if ($b -gt 0) { $line += ' / 배정 {0}' -f (Fmt $b) }
-        if ($b -gt 0 -and $el -gt $b) { $line += '  (+{0} 초과)' -f (Fmt ($el - $b)); $overCount++ }
-        $lines.Add($line)
-    }
-    $lines.Add('')
-    $lines.Add(('총 {0} / 시간 초과 {1}명' -f (Fmt $total), $overCount))
-    $lines -join "`r`n"
-}
-
-function Paint-SummaryRows($g) {
-    $W = $script:SumCanvas.ClientSize.Width
-    $g.Clear($C.White)
-    $rowH = S 36
-    for ($i = 0; $i -lt $script:People.Count; $i++) {
-        $y = $i * $rowH
-        $el = Get-Elapsed $i
-        $b = $script:People[$i].Budget
-        $t = Fmt $el
-        $tw = Measure-W $t (FN 14)
-        Draw-Text $g $t (FN 14) $C.Ink ($W - $tw) $y ($tw + 2) $rowH
-        $right = $W - $tw - (S 8)
-        if ($b -gt 0) {
-            $bt = '/ {0}' -f (Fmt $b)
-            $bw = Measure-W $bt (FK 12)
-            Draw-Text $g $bt (FK 12) $C.Graphite ($right - $bw) $y ($bw + 2) $rowH
-            $right -= $bw + (S 10)
-        }
-        if ($b -gt 0 -and $el -gt $b) {
-            $ot = '+' + (Fmt ($el - $b))
-            $ow = (Measure-W $ot (FN 12)) + (S 12)
-            $oy = $y + [int](($rowH - (S 22)) / 2)
-            Fill-Round $g $C.Coral ($right - $ow) $oy $ow (S 22) (S 3)
-            Draw-Text $g $ot (FN 12) $C.White ($right - $ow) $oy $ow (S 22) 'Center'
-        }
-        Draw-Text $g ('발표자 {0}' -f ($i + 1)) (FK 14) $C.Ink 0 $y (S 120) $rowH
-        Draw-HLine $g $C.Fog 0 $W ($y + $rowH - 1)
-    }
-}
-
-function Show-Summary {
-    $total = 0.0; $overCount = 0
-    for ($i = 0; $i -lt $script:People.Count; $i++) {
-        $el = Get-Elapsed $i; $total += $el
-        $b = $script:People[$i].Budget
-        if ($b -gt 0 -and $el -gt $b) { $overCount++ }
-    }
-    $script:SumText = Get-Summary
-    $rowsH = [math]::Min((S 400), (S 36) * $script:People.Count)
-
-    $dlg = New-Object Windows.Forms.Form
-    $dlg.Text = 'CameraHAL_MeetingTimer'
-    $dlg.ClientSize = New-Object Drawing.Size((S 380), ((S 172) + $rowsH))
-    $dlg.StartPosition = 'CenterScreen'
-    $dlg.FormBorderStyle = 'FixedDialog'
-    $dlg.MaximizeBox = $false
-    $dlg.MinimizeBox = $false
-    $dlg.TopMost = $true
-    $dlg.BackColor = $C.White
-    $dlg.KeyPreview = $true
-    $dlg.add_KeyDown({ param($s, $e) if ($e.KeyCode -eq 'Escape' -or $e.KeyCode -eq 'Enter') { $s.Close() } })
-
-    $title = New-Object Windows.Forms.Label
-    $title.Text = '미팅 결과'
-    $title.Font = FKM 22
-    $title.ForeColor = $C.Ink
-    $title.SetBounds((S 24), (S 20), (S 332), (S 34))
-
-    $sub = New-Object Windows.Forms.Label
-    $sub.Text = '총 {0} · 시간 초과 {1}명 · 종료 {2}' -f (Fmt $total), $overCount, $script:End.ToString('HH:mm')
-    $sub.Font = FK 13
-    $sub.ForeColor = $C.Graphite
-    $sub.SetBounds((S 24), (S 56), (S 332), (S 22))
-
-    $script:SumCanvas = New-Object MtCanvas
-    $script:SumCanvas.SetBounds((S 24), (S 92), (S 332), $rowsH)
-    $script:SumCanvas.add_Paint({ param($s, $e) Paint-SummaryRows $e.Graphics })
-
-    $btnY = (S 112) + $rowsH
-    $script:SumCopy = New-Button '결과 복사' 'primary' 108 40 {
-        [Windows.Forms.Clipboard]::SetText($script:SumText)
-        $script:SumCopy.Text = '복사됨'
-    }
-    $script:SumCopy.Location = New-Object Drawing.Point((S 248), $btnY)
-    $close = New-Button '닫기' 'outline' 84 40 { $script:SumDlg.Close() }
-    $close.Location = New-Object Drawing.Point((S 156), $btnY)
-
-    $dlg.Controls.AddRange(@($title, $sub, $script:SumCanvas, $close, $script:SumCopy))
-    $script:SumDlg = $dlg
-    [void]$dlg.ShowDialog($form)
-    $dlg.Dispose()
 }
 
 # ---------------- settings ----------------
@@ -708,36 +700,48 @@ function New-DlgLabel([string]$text, $font, $color, [int]$x, [int]$y, [int]$w, [
 
 function Show-Settings {
     $dlg = New-Object Windows.Forms.Form
+    $dlg.Name = 'Settings'
     $dlg.Text = 'CameraHAL_MeetingTimer'
     $dlg.ClientSize = New-Object Drawing.Size((S 340), (S 412))
-    $dlg.StartPosition = 'CenterScreen'
+    $dlg.StartPosition = 'CenterParent'
     $dlg.FormBorderStyle = 'FixedDialog'
     $dlg.MaximizeBox = $false
     $dlg.MinimizeBox = $false
     $dlg.TopMost = $true
     $dlg.BackColor = $C.White
     $dlg.KeyPreview = $true
-    $dlg.add_KeyDown({ param($s, $e) if ($e.KeyCode -eq 'Escape') { $s.DialogResult = 'Cancel'; $s.Close() } })
-
     $title = New-DlgLabel '설정' (FKM 22) $C.Ink 24 20 292 34
 
     $l1 = New-DlgLabel '발표자 수' (FKM 14) $C.Ink 24 72 140 22
     $num = New-Object Windows.Forms.NumericUpDown
+    $num.Name = 'SpeakerCount'
     $num.Minimum = 1
     $num.Maximum = 50
     $num.Value = [decimal]$script:People.Count
     $num.Font = FK 15
     $num.BorderStyle = 'FixedSingle'
     $num.SetBounds((S 24), (S 98), (S 120), (S 32))
+    $num.TabIndex = 0
 
-    $l2 = New-DlgLabel '회의 종료 시각' (FKM 14) $C.Ink 172 72 140 22
+    $l2 = New-DlgLabel '종료 시각' (FKM 14) $C.Ink 172 72 144 22
     $dt = New-Object Windows.Forms.DateTimePicker
+    $dt.Name = 'MeetingEnd'
     $dt.Format = 'Custom'
     $dt.CustomFormat = 'HH:mm'
     $dt.ShowUpDown = $true
     $dt.Font = FK 15
-    $dt.Value = $script:End
-    $dt.SetBounds((S 172), (S 98), (S 120), (S 32))
+    $initialEnd = $script:End
+    $dt.Value = $initialEnd
+    $dt.SetBounds((S 172), (S 98), (S 144), (S 32))
+    $dt.TabIndex = 1
+    $script:SetEndPicker = $dt
+    $script:SetEndLabel = $l2
+    $script:SetInitialEnd = $initialEnd
+    $dt.add_ValueChanged({
+        $end = Resolve-EndTime $script:SetEndPicker.Value $script:SetInitialEnd
+        $script:SetEndLabel.Text = if ($end.Date -gt (Get-Date).Date) { '종료 시각 · 다음 날' } else { '종료 시각' }
+    })
+    if ($initialEnd.Date -gt (Get-Date).Date) { $l2.Text = '종료 시각 · 다음 날' }
 
     $h1 = New-DlgLabel '남은 회의 시간은 아직 시작하지 않은 발표자에게 자동으로 똑같이 나뉩니다.' (FK 12) $C.Graphite 24 140 292 40
 
@@ -747,6 +751,7 @@ function Show-Settings {
     $cbTop.ForeColor = $C.Ink
     $cbTop.Checked = $form.TopMost
     $cbTop.SetBounds((S 24), (S 192), (S 292), (S 26))
+    $cbTop.TabIndex = 2
 
     $cbSound = New-Object Windows.Forms.CheckBox
     $cbSound.Text = '알림음 사용 (마감 직전, 시간 초과)'
@@ -754,20 +759,27 @@ function Show-Settings {
     $cbSound.ForeColor = $C.Ink
     $cbSound.Checked = $script:Sound
     $cbSound.SetBounds((S 24), (S 222), (S 292), (S 26))
+    $cbSound.TabIndex = 3
 
     $script:SetDlg = $dlg
     $script:SetStartOver = $false
     $restart = New-Button '새 회의 시작' 'quiet' 120 36 {
-        $r = [Windows.Forms.MessageBox]::Show($script:SetDlg, "기록을 모두 지우고 종료 시각을 다음 정각으로 되돌립니다.`n진행할까요?", '새 회의', 'YesNo', 'Warning')
-        if ($r -eq 'Yes') { $script:SetStartOver = $true; $script:SetDlg.DialogResult = 'OK'; $script:SetDlg.Close() }
+        if (Confirm-Action "기록을 모두 지우고 종료 시각을 다음 정각으로 되돌립니다.`n진행할까요?" '새 회의') {
+            $script:SetStartOver = $true; $script:SetDlg.DialogResult = 'OK'; $script:SetDlg.Close()
+        }
     }
     $restart.Location = New-Object Drawing.Point((S 24), (S 270))
+    $restart.TabIndex = 4
     $h2 = New-DlgLabel "기록을 지우고, 종료 시각을`n다음 정각으로 되돌립니다." (FK 12) $C.Graphite 156 268 170 40
 
     $save = New-Button '저장' 'primary' 92 40 { $script:SetDlg.DialogResult = 'OK'; $script:SetDlg.Close() }
     $save.Location = New-Object Drawing.Point((S 224), (S 348))
+    $save.TabIndex = 6
     $cancel = New-Button '취소' 'outline' 84 40 { $script:SetDlg.DialogResult = 'Cancel'; $script:SetDlg.Close() }
     $cancel.Location = New-Object Drawing.Point((S 132), (S 348))
+    $cancel.TabIndex = 5
+    $dlg.AcceptButton = $save
+    $dlg.CancelButton = $cancel
 
     $dlg.Controls.AddRange(@($title, $l1, $num, $l2, $dt, $h1, $cbTop, $cbSound, $restart, $h2, $cancel, $save))
 
@@ -778,11 +790,13 @@ function Show-Settings {
         if ($script:SetStartOver) {
             Start-Over
         } else {
-            # Picked time is today's; if it is already past, it means tomorrow.
-            $now = Get-Date
-            $end = $now.Date.AddHours($dt.Value.Hour).AddMinutes($dt.Value.Minute)
-            if ($end -le $now) { $end = $end.AddDays(1) }
-            if ($end -ne $script:End) { $script:End = $end; $script:EndFlashed = $false }
+            # Preserve an unchanged deadline, even if it passed while this dialog was open.
+            $end = Resolve-EndTime $dt.Value $initialEnd
+            if ($end -ne $script:End) {
+                $script:End = $end
+                $script:EndFlashed = $false
+                $script:UndoSwitch = $null
+            }
             Set-Count $script:Cfg.Count
         }
         try { Save-Config } catch { }
@@ -792,16 +806,26 @@ function Show-Settings {
 }
 
 # ---------------- controls ----------------
-$btnRun  = New-Button '시작' 'primary' 92 36 { Toggle-Run }
-$btnNext = New-Button '다음' 'ink' 72 36 { Go-Next }
-$btnSet  = New-Button '설정' 'quiet' 60 36 { Show-Settings }
-$band.Controls.AddRange(@($btnRun, $btnNext, $btnSet))
+$btnRun  = New-Button '시작' 'primary' 84 36 { Toggle-Run }
+$btnNext = New-Button '다음' 'ink' 60 36 { Go-Next }
+$btnUndo = New-Button '되돌리기' 'quiet' 68 36 { Undo-Last }
+$btnSet  = New-Button '설정' 'quiet' 52 36 { Show-Settings }
+$btnRun.TabIndex = 0
+$btnNext.TabIndex = 1
+$btnUndo.TabIndex = 2
+$btnSet.TabIndex = 3
+$band.Controls.AddRange(@($btnRun, $btnNext, $btnUndo, $btnSet))
+$tips = New-Object Windows.Forms.ToolTip
+$tips.SetToolTip($btnRun, '시작 / 일시정지 (Space)')
+$tips.SetToolTip($btnNext, '다음 발표자를 바로 시작합니다 (N / →)')
+$tips.SetToolTip($btnUndo, '직전 전환, 종료, 초기화를 취소합니다 (Ctrl+Z)')
+$tips.SetToolTip($btnSet, '발표자 수, 종료 시각, 알림음 설정 (S)')
 
 function Layout-Band {
     $W = $band.ClientSize.Width
     $y = [int](($band.ClientSize.Height - $btnRun.Height) / 2) + 1
     $x = S 16
-    foreach ($b in @($btnRun, $btnNext)) {
+    foreach ($b in @($btnRun, $btnNext, $btnUndo)) {
         $b.Location = New-Object Drawing.Point($x, $y)
         $x += $b.Width + (S 6)
     }
@@ -824,6 +848,12 @@ $form.add_Shown({
 
 $form.add_KeyDown({
     param($s, $e)
+    if ($e.Control -and $e.KeyCode -eq 'Z') {
+        Undo-Last
+        $e.Handled = $true
+        $e.SuppressKeyPress = $true
+        return
+    }
     switch ($e.KeyCode) {
         'Space' { Toggle-Run }
         'N'     { Go-Next }
@@ -853,3 +883,4 @@ Place-Corner
 $timer.Start()
 [void]$form.ShowDialog()
 $form.Dispose()
+$tips.Dispose()

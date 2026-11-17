@@ -16,7 +16,7 @@ There is no build, lint, or test suite.
   ```
   powershell.exe -NoProfile -STA -ExecutionPolicy RemoteSigned -File .\CameraHAL_MeetingTimer.ps1
   ```
-  `-STA` is required (clipboard copy in the summary dialog).
+  `-STA` keeps the WinForms runtime in its supported apartment mode.
 - Syntax check without launching the UI:
   ```
   $e=$null; [void][System.Management.Automation.Language.Parser]::ParseFile("$PWD\CameraHAL_MeetingTimer.ps1",[ref]$null,[ref]$e); $e
@@ -27,16 +27,16 @@ There is no build, lint, or test suite.
 
 The script runs top to bottom and ends in `$form.ShowDialog()`. Sections are marked with `# ---------------- name ----------------` comments.
 
-1. **Inline C# (`Add-Type`)**: `MtNative` (P/Invoke: `FlashWindowEx`, `SetProcessDPIAware`, foreground check, rounded-rect path), `MtCanvas` (double-buffered panel), `MtButton` (custom-painted, **non-selectable** button so Space/N/P always reach the form's `KeyDown` handler instead of activating a focused button). Guarded by `if (-not ('MtButton' -as [type]))` because a type cannot be re-added in the same session.
+1. **Inline C# (`Add-Type`)**: `MtNative` (P/Invoke: `FlashWindowEx`, `SetProcessDPIAware`, foreground check, rounded-rect path), `MtCanvas` (double-buffered panel), `MtButton` (custom-painted native Button with keyboard focus, accessibility, and dialog-button support). The main form intercepts Space to toggle the timer regardless of the focused button. Guarded by `if (-not ('MtButton' -as [type]))` because a type cannot be re-added in the same session.
 2. **DPI scaling**: every pixel size goes through `S <px>`; fonts through `FK`/`FKM` (Korean) and `FN` (numerals). New layout code must use these, not raw pixels.
-3. **State** lives in `$script:` variables: `People` (array of `New-Person` objects: `Used`, `Budget`, alert flags `W2`/`W1`/`Zero`/`Over`), `Idx` (current speaker), `Sw` (one `Stopwatch` for the current speaker only), `End` (meeting end time).
+3. **State** lives in `$script:` variables: `People` (array of `New-Person` objects: `Used`, `Budget`, `Started`, alert flags `W2`/`W1`/`Zero`/`Over`), `Idx` (current speaker), `Sw` (one `Stopwatch` for the current speaker only), `End` (meeting end time), `UndoSwitch` (one transition snapshot).
 4. **Time-sharing model** (the core logic):
    - A speaker's elapsed time = their committed `Used` + `Sw.Elapsed` if they are current. `Commit-Current` folds the stopwatch into `Used` and resets it; call it before changing `Idx`.
-   - `Budget = 0` means "not locked yet". `Get-Preview` computes the share for unlocked speakers: (meeting time left − current locked speaker's remaining budget) / number of unlocked speakers from `Idx` onward, rounded down to 10 s.
-   - `Lock-Budget` fixes the current speaker's budget (min 30 s) the moment they start. So overruns shrink only the shares of people who have not started.
+   - `Started = false` means "not locked yet". `Get-Preview` computes the share for unlocked speakers: (meeting time left − current locked speaker's remaining budget) / number of unlocked speakers from `Idx` onward, rounded down to 10 s.
+   - `Lock-Budget` fixes the current speaker's budget the moment they start. A zero-second budget remains locked, so continuing after the deadline records overtime without creating extra time. New starts with no allocation require confirmation.
    - `Get-Phase` derives display level (`normal`/`notice`/`critical`/`over`) with thresholds that scale for short budgets (`min(120, 30%)`, `min(60, 15%)`).
 5. **Render loop**: a 200 ms `Windows.Forms.Timer` calls `Check-Alerts` (sounds, one-shot flags, taskbar flash every 30 s of overtime when the window is in the background) then `Refresh-All`, which invalidates the custom-painted `$strip` (top bar), `$stage` (big timer), and updates button text and the window title (title doubles as the taskbar label while minimized).
-6. **Dialogs**: `Show-Settings` and `Show-Summary` build modal forms inline.
+6. **Settings**: `Show-Settings` builds a modal form inline. Settings uses a time-only picker and preserves an unchanged deadline. An edited time earlier than now means tomorrow and is labeled accordingly. Finishing the last speaker returns to a fresh meeting. Undo restores the most recent transition, finish, or reset, including its deadline and clock state.
 
 ## Constraints to preserve
 
@@ -45,4 +45,4 @@ The script runs top to bottom and ends in `$form.ShowDialog()`. Sections are mar
 - README promises no network access, admin rights, registry writes, or downloads.
 - `.bat`, `.ps1`, `.md` must keep CRLF line endings (enforced by `.gitattributes`). The `.ps1` starts with a UTF-8 BOM, which PowerShell 5.1 needs to read the Korean strings correctly; keep it.
 - Visual style follows the HP-inspired DESIGN.md (getdesign.md/hp): white canvas, `#1a1a1a` ink, single accent `#024ad8`, 4px radius buttons, 1px hairlines. Colors come from the `$C` palette.
-- Keyboard shortcuts (Space, N/→, P/←, R, S, M) are documented in README; update it when they change.
+- Keyboard shortcuts (Space, N/→, Ctrl+Z, R, S, M, and dialog shortcuts) are documented in README; update it when they change.
