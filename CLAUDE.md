@@ -40,9 +40,9 @@ The script runs top to bottom and ends in `$form.ShowDialog()`. Sections are mar
 
 ## Constraints to preserve
 
-- **`config.json` is untrusted input.** `Load-Config` caps size at 4 KB, requires a JSON object, and type/range-checks every field, falling back to defaults. Keep that pattern for any new field. The speaker count is saved as `Speakers`, not `Count`, because `.Count` is a built-in PowerShell property; `Count` is still read for older configs.
+- **`config.json` is untrusted input.** `Load-Config` caps size at 4 KB, requires a JSON object, and type/range-checks every field, falling back to defaults. Keep that pattern for any new field. The speaker count is saved as `Speakers`, not `Count`, because `.Count` is a built-in PowerShell property; `Count` is still read for older configs. `Theme` is accepted only as exactly `light` or `dark`.
 - **Launcher security** (`.bat`): calls `conhost.exe` and `powershell.exe` by full `%SystemRoot%` path (avoids binary planting from the current folder), uses process-scoped `-ExecutionPolicy RemoteSigned`, and `conhost --headless` to hide the console. The script undoes the hidden-window launch in `form.add_Shown`.
 - README promises no network access, admin rights, registry writes, or downloads.
 - `.bat`, `.ps1`, `.md` must keep CRLF line endings (enforced by `.gitattributes`). The `.ps1` starts with a UTF-8 BOM, which PowerShell 5.1 needs to read the Korean strings correctly; keep it.
-- Visual style follows the HP-inspired DESIGN.md (getdesign.md/hp): white canvas, `#1a1a1a` ink, single accent `#024ad8`, 4px radius buttons, 1px hairlines. Colors come from the `$C` palette.
-- Keyboard shortcuts (Space, N/→, P/←, R, S, M) are documented in README; update it when they change.
+- Visual style follows the HP-inspired DESIGN.md (getdesign.md/hp): white canvas, `#1a1a1a` ink, single accent `#024ad8`, 4px radius buttons, 1px hairlines. Colors are named by role (`Paper`, `Ink`, `Strip`, `Accent`, `Crit`, ...) in two tables, `$Themes.light` and `$Themes.dark` (dark follows getdesign.md/raycast); `$C` is the active one and `Set-Theme` swaps it. Never hardcode a hue name or hex in painting code: add a role to both tables. The settings dialog is pinned to `$Themes.light` (native controls cannot be themed) and passes that table to `New-Button`.
+- Keyboard shortcuts (Space, N/→, R, S, M, D) are documented in README; update it when they change.
