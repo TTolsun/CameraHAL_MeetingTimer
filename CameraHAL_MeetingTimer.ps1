@@ -28,6 +28,14 @@ public static class MtNative {
     [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
     [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
     [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+    [DllImport("dwmapi.dll")] static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int val, int size);
+    // Dark title bar to match the dark theme (attribute 20 on current Windows 10/11, 19 on early 20H1 builds).
+    public static void DarkTitle(IntPtr h, bool on) {
+        int v = on ? 1 : 0;
+        try {
+            if (DwmSetWindowAttribute(h, 20, ref v, 4) != 0) DwmSetWindowAttribute(h, 19, ref v, 4);
+        } catch { }
+    }
 
     [StructLayout(LayoutKind.Sequential)]
     struct FLASHWINFO { public uint cbSize; public IntPtr hwnd; public uint dwFlags; public uint uCount; public uint dwTimeout; }
@@ -123,26 +131,38 @@ $script:ConfigFile = Join-Path $script:Dir 'config.json'
 # ---------------- design tokens ----------------
 function Col([string]$hex) { [Drawing.ColorTranslator]::FromHtml($hex) }
 # Note: never name a local variable $c - PowerShell names are case-insensitive.
-$C = @{
-    Primary      = Col '#024ad8'
-    PrimaryHover = Col '#0340b8'
-    PrimaryDeep  = Col '#0e3191'
-    PrimaryTint  = Col '#8fb4ff'
-    Ink         = Col '#1a1a1a'
-    InkSoft      = Col '#292929'
-    Black        = Col '#000000'
-    Charcoal     = Col '#3d3d3d'
-    Graphite     = Col '#636363'
-    White        = Col '#ffffff'
-    Cloud        = Col '#f7f7f7'
-    Fog          = Col '#e8e8e8'
-    Steel        = Col '#c2c2c2'
-    Error        = Col '#b3262b'
-    Wine         = Col '#5a1313'
-    Coral        = Col '#ff5050'
-    Rose         = Col '#f9d4d2'
+# Colors are named by ROLE, not by hue, so the same code paints both themes
+# ("Paper" is white in light and near-black in dark). The settings dialog always
+# uses the light table ($Themes.light); the active table is $C.
+function New-Theme([hashtable]$hex) {
+    $t = @{}
+    foreach ($k in $hex.Keys) { if ($hex[$k]) { $t[$k] = Col $hex[$k] } else { $t[$k] = [Drawing.Color]::Empty } }
+    $t
+}
+$Themes = @{
+    light = New-Theme @{
+        Paper = '#ffffff'; Ink = '#1a1a1a'; Sub = '#636363'; Hair = '#e8e8e8'; Band = '#f7f7f7'
+        Strip = '#1a1a1a'; StripInk = '#ffffff'; StripMute = '#c2c2c2'; StripHover = '#292929'
+        Accent = '#024ad8'; Plus = '#8fb4ff'; Warn = '#ff5050'; Zero = '#636363'
+        Crit = '#b3262b'; OverBg = '#b3262b'; OverPulse = '#5a1313'; OverInk = '#ffffff'; OverSub = '#f9d4d2'
+        IdleInk = '#3d3d3d'; IdleLine = '#c2c2c2'; Done = '#3d3d3d'
+        BtnPrimary = '#024ad8'; BtnPrimaryInk = '#ffffff'; BtnPrimaryHover = '#0340b8'; BtnPrimaryPress = '#0e3191'
+        BtnInk = '#1a1a1a'; BtnInkText = '#ffffff'; BtnInkLine = ''; BtnInkHover = '#292929'; BtnInkPress = '#000000'
+    }
+    # Dark follows the Raycast DESIGN.md (getdesign.md/raycast): near-black canvas,
+    # hairline borders and one accent per state (blue, red).
+    dark = New-Theme @{
+        Paper = '#07080a'; Ink = '#f4f4f6'; Sub = '#9c9c9d'; Hair = '#242728'; Band = '#0d0d0d'
+        Strip = '#0d0d0d'; StripInk = '#f4f4f6'; StripMute = '#9c9c9d'; StripHover = '#1c1c1d'
+        Accent = '#57c1ff'; Plus = '#57c1ff'; Warn = '#ff6161'; Zero = '#6a6b6c'
+        Crit = '#ff6161'; OverBg = '#a1131a'; OverPulse = '#5a0a0f'; OverInk = '#ffffff'; OverSub = '#f9d4d2'
+        IdleInk = '#cdcdcd'; IdleLine = '#434345'; Done = '#8a8a8c'
+        BtnPrimary = '#ffffff'; BtnPrimaryInk = '#000000'; BtnPrimaryHover = '#e8e8e8'; BtnPrimaryPress = '#cfcfcf'
+        BtnInk = '#121212'; BtnInkText = '#f4f4f6'; BtnInkLine = '#3a3d3f'; BtnInkHover = '#1c1c1d'; BtnInkPress = '#242728'
+    }
 }
 $NoColor = [Drawing.Color]::Empty
+$C = $Themes.light
 
 $installed = @((New-Object Drawing.Text.InstalledFontCollection).Families | ForEach-Object { $_.Name })
 function Pick-Font([string[]]$cands, [string]$fallback) {
@@ -172,7 +192,7 @@ function FN([double]$px)  { Font-Px $famNum ($px * $script:Scale) $numStyle }
 
 # ---------------- config ----------------
 function Load-Config {
-    $cfg = [pscustomobject]@{ Count = 6; Sound = $true; TopMost = $true }
+    $cfg = [pscustomobject]@{ Count = 6; Sound = $true; TopMost = $true; Theme = 'light' }
     # config.json is treated as untrusted data: plain JSON only (no object
     # deserialization), size-capped, and every field type- and range-checked.
     # Anything unexpected falls back to the defaults above.
@@ -189,6 +209,8 @@ function Load-Config {
         if ($raw -and $raw.Value -is [int] -and [int]::TryParse("$($raw.Value)", [ref]$n) -and $n -ge 1 -and $n -le 50) { $cfg.Count = $n }
         if ($j.Sound -is [bool]) { $cfg.Sound = $j.Sound }
         if ($j.TopMost -is [bool]) { $cfg.TopMost = $j.TopMost }
+        # Only the two known theme names are accepted; anything else keeps the default.
+        if ($j.Theme -is [string] -and ($j.Theme -ceq 'light' -or $j.Theme -ceq 'dark')) { $cfg.Theme = $j.Theme }
     } catch { }
     $cfg
 }
@@ -200,6 +222,7 @@ function Save-Config {
         Speakers = [int]$script:People.Count
         Sound    = [bool]$script:Sound
         TopMost  = [bool]$form.TopMost
+        Theme    = [string]$script:ThemeName
     } | ConvertTo-Json
     [IO.File]::WriteAllText($script:ConfigFile, $json, (New-Object Text.UTF8Encoding $false))
 }
@@ -211,6 +234,8 @@ function Get-NextHour {
 
 $script:Cfg = Load-Config
 $script:Sound = $script:Cfg.Sound
+$script:ThemeName = $script:Cfg.Theme
+$C = $Themes[$script:ThemeName]
 $script:End = Get-NextHour
 $script:Sw = New-Object System.Diagnostics.Stopwatch
 $script:People = @()
@@ -365,22 +390,24 @@ function Draw-HLine($g, $color, [int]$x1, [int]$x2, [int]$y) {
 }
 
 # ---------------- buttons ----------------
-function Set-ButtonKind($b, [string]$kind) {
+function Set-ButtonKind($b, [string]$kind, $pal = $null) {
+    if (-not $pal) { $pal = $C }
     $b.Radius = S 4
     switch ($kind) {
-        'primary' { $b.SetColors($C.Primary, $C.White, $NoColor, $C.PrimaryHover, $C.PrimaryDeep) }
-        'ink'     { $b.SetColors($C.Ink, $C.White, $NoColor, $C.InkSoft, $C.Black) }
-        'outline' { $b.SetColors($C.White, $C.Ink, $C.Ink, $C.Cloud, $C.Fog) }
-        'quiet'   { $b.SetColors($C.White, $C.Ink, $C.Steel, $C.Cloud, $C.Fog) }
+        'primary' { $b.SetColors($pal.BtnPrimary, $pal.BtnPrimaryInk, $NoColor, $pal.BtnPrimaryHover, $pal.BtnPrimaryPress) }
+        'ink'     { $b.SetColors($pal.BtnInk, $pal.BtnInkText, $pal.BtnInkLine, $pal.BtnInkHover, $pal.BtnInkPress) }
+        'outline' { $b.SetColors($pal.Paper, $pal.Ink, $pal.Ink, $pal.Band, $pal.Hair) }
+        'quiet'   { $b.SetColors($pal.Paper, $pal.Ink, $pal.StripMute, $pal.Band, $pal.Hair) }
     }
 }
 
-function New-Button([string]$text, [string]$kind, [int]$w, [int]$h, [scriptblock]$onClick) {
+# $pal: pass a theme table to pin a button to it (the settings dialog is always light).
+function New-Button([string]$text, [string]$kind, [int]$w, [int]$h, [scriptblock]$onClick, $pal = $null) {
     $b = New-Object MtButton
     $b.Text = $text
     $b.Size = New-Object Drawing.Size((S $w), (S $h))
     $b.Font = FKM 13
-    Set-ButtonKind $b $kind
+    Set-ButtonKind $b $kind $pal
     $b.add_Click($onClick)
     $b
 }
@@ -418,7 +445,7 @@ $form.ClientSize = New-Object Drawing.Size((S 380), (S 290))
 $form.MinimumSize = New-Object Drawing.Size(((Get-MinClientWidth) + ($form.Width - $form.ClientSize.Width)), (S 290))
 $form.MaximizeBox = $false
 $form.StartPosition = 'Manual'
-$form.BackColor = $C.White
+$form.BackColor = $C.Paper
 $form.TopMost = $script:Cfg.TopMost
 $form.KeyPreview = $true
 $form.Font = FK 13
@@ -427,16 +454,16 @@ try { $form.Icon = [Drawing.Icon]::ExtractAssociatedIcon((Get-Process -Id $PID).
 $strip = New-Object MtCanvas
 $strip.Dock = 'Top'
 $strip.Height = S 36
-$strip.BackColor = $C.Ink
+$strip.BackColor = $C.Strip
 
 $stage = New-Object MtCanvas
 $stage.Dock = 'Fill'
-$stage.BackColor = $C.White
+$stage.BackColor = $C.Paper
 
 $band = New-Object MtCanvas
 $band.Dock = 'Bottom'
 $band.Height = S 56
-$band.BackColor = $C.Cloud
+$band.BackColor = $C.Band
 
 # The control added FIRST is docked LAST, so Fill goes in first.
 $form.Controls.Add($stage)
@@ -469,31 +496,31 @@ function Paint-Gear($g, [int]$cx, [int]$cy, $color, $bg) {
 function Get-PlanDelta {
     $st = Get-Phase
     $d = if ($script:Plan -gt 0) { [math]::Round(($st.Budget - $script:Plan) / 10) * 10 } else { 0 }
-    if ($d -gt 0)     { [pscustomobject]@{ Text = '+' + (Fmt $d); Color = $C.PrimaryTint } }
-    elseif ($d -lt 0) { [pscustomobject]@{ Text = '-' + (Fmt $d); Color = $C.Coral } }
-    else              { [pscustomobject]@{ Text = '±00:00'; Color = $C.Graphite } }
+    if ($d -gt 0)     { [pscustomobject]@{ Text = '+' + (Fmt $d); Color = $C.Plus } }
+    elseif ($d -lt 0) { [pscustomobject]@{ Text = '-' + (Fmt $d); Color = $C.Warn } }
+    else              { [pscustomobject]@{ Text = '±00:00'; Color = $C.Zero } }
 }
 
 function Paint-Strip($g) {
     $W = $strip.ClientSize.Width; $H = $strip.ClientSize.Height
     if ($W -lt 10) { return }
-    $g.Clear($C.Ink)
+    $g.Clear($C.Strip)
 
     # Settings gear at the right edge; it also decides how much room the text gets.
     $gw = S 36
     $script:GearRect = New-Object Drawing.Rectangle(($W - $gw), 0, $gw, $H)
-    $gbg = if ($script:GearHot) { $C.InkSoft } else { $C.Ink }
+    $gbg = if ($script:GearHot) { $C.StripHover } else { $C.Strip }
     if ($script:GearHot) { $gb = New-Object Drawing.SolidBrush($gbg); $g.FillRectangle($gb, $script:GearRect); $gb.Dispose() }
-    Paint-Gear $g ($W - [int]($gw / 2)) ([int]($H / 2)) $(if ($script:GearHot) { $C.White } else { $C.Steel }) $gbg
+    Paint-Gear $g ($W - [int]($gw / 2)) ([int]($H / 2)) $(if ($script:GearHot) { $C.StripInk } else { $C.StripMute }) $gbg
 
     $left = Get-MeetingLeft
     if ($left -gt 0 -and (Test-Overbooked)) {
-        $tailFull = '종료 시각 초과 예상'; $tailShort = '초과 예상'; $tc = $C.Coral
+        $tailFull = '종료 시각 초과 예상'; $tailShort = '초과 예상'; $tc = $C.Warn
     } elseif ($left -gt 0) {
         $m = [int][math]::Ceiling($left / 60)
-        $tailFull = '{0}분 남음' -f $m; $tailShort = '{0}분' -f $m; $tc = $C.Steel
+        $tailFull = '{0}분 남음' -f $m; $tailShort = '{0}분' -f $m; $tc = $C.StripMute
     } else {
-        $tailFull = '회의 시간 종료'; $tailShort = '회의 종료'; $tc = $C.Coral
+        $tailFull = '회의 시간 종료'; $tailShort = '회의 종료'; $tc = $C.Warn
     }
 
     # Pick the richest variant that fits: full text, short tail, then no "현재"/"종료" labels.
@@ -509,12 +536,12 @@ function Paint-Strip($g) {
     $x = S 16
     if ($pick.Labels) {
         $lw = Measure-W '현재' (FK 12)
-        Draw-Text $g '현재' (FK 12) $C.Steel $x 0 ($lw + 2) $H
+        Draw-Text $g '현재' (FK 12) $C.StripMute $x 0 ($lw + 2) $H
         $x += $lw + (S 6)
     }
     $clock = (Get-Date).ToString('HH:mm')
     $clw = Measure-W $clock (FN 14)
-    Draw-Text $g $clock (FN 14) $C.White $x 0 ($clw + 2) $H
+    Draw-Text $g $clock (FN 14) $C.StripInk $x 0 ($clw + 2) $H
     $leftEnd = $x + $clw
 
     $right = $W - $gw - (S 4)
@@ -522,12 +549,12 @@ function Paint-Strip($g) {
     Draw-Text $g $pick.Tail (FK 12) $tc ($right - $tw) 0 ($tw + 2) $H
     $right -= $tw + (S 10)
     $ew = Measure-W $script:End.ToString('HH:mm') (FN 14)
-    Draw-Text $g $script:End.ToString('HH:mm') (FN 14) $C.White ($right - $ew) 0 ($ew + 2) $H
+    Draw-Text $g $script:End.ToString('HH:mm') (FN 14) $C.StripInk ($right - $ew) 0 ($ew + 2) $H
     $rightStart = $right - $ew
     if ($pick.Labels) {
         $right -= $ew + (S 6)
         $kw = Measure-W '종료' (FK 12)
-        Draw-Text $g '종료' (FK 12) $C.Steel ($right - $kw) 0 ($kw + 2) $H
+        Draw-Text $g '종료' (FK 12) $C.StripMute ($right - $kw) 0 ($kw + 2) $H
         $rightStart = $right - $kw
     }
 
@@ -547,10 +574,10 @@ function Paint-Stage($g) {
     if ($isOver) {
         # Red slab, pulsing to wine every half second while the clock runs.
         $flash = $st.Run -eq 'run' -and ([int][math]::Floor($st.El * 2) % 2) -eq 1
-        $bg = if ($flash) { $C.Wine } else { $C.Error }
-        $fg = $C.White; $sub = $C.Rose
+        $bg = if ($flash) { $C.OverPulse } else { $C.OverBg }
+        $fg = $C.OverInk; $sub = $C.OverSub
     } else {
-        $bg = $C.White; $fg = $C.Ink; $sub = $C.Graphite
+        $bg = $C.Paper; $fg = $C.Ink; $sub = $C.Sub
     }
     $g.Clear($bg)
     $pad = S 20
@@ -561,10 +588,10 @@ function Paint-Stage($g) {
     $hw = Measure-W $head (FKM 16)
     Draw-Text $g $head (FKM 16) $fg $pad (S 14) ($hw + 2) (S 26)
     Draw-Text $g (' / {0}명' -f $script:People.Count) (FK 13) $sub ($pad + $hw) (S 14) (S 80) (S 26)
-    if ($isOver)                 { $bt = '시간 초과'; $bf = $C.White; $bc = $C.Error;    $bb = $NoColor }
-    elseif ($st.Run -eq 'run')   { $bt = '진행 중';  $bf = $C.Ink;   $bc = $C.White;    $bb = $NoColor }
-    elseif ($st.Run -eq 'pause') { $bt = '일시정지'; $bf = $NoColor; $bc = $C.Ink;      $bb = $C.Ink }
-    else                         { $bt = '대기';     $bf = $NoColor; $bc = $C.Charcoal; $bb = $C.Steel }
+    if ($isOver)                 { $bt = '시간 초과'; $bf = $C.OverInk; $bc = $C.OverBg;   $bb = $NoColor }
+    elseif ($st.Run -eq 'run')   { $bt = '진행 중';  $bf = $C.Ink;      $bc = $C.Paper;    $bb = $NoColor }
+    elseif ($st.Run -eq 'pause') { $bt = '일시정지'; $bf = $NoColor;    $bc = $C.Ink;      $bb = $C.Ink }
+    else                         { $bt = '대기';     $bf = $NoColor;    $bc = $C.IdleInk;  $bb = $C.IdleLine }
     [void](Draw-PillRight $g $bt (FKM 12) $bf $bc $bb ($W - $pad) (S 15) (S 24))
 
     # Countdown digits
@@ -572,16 +599,16 @@ function Paint-Stage($g) {
     $bottom = $H - (S 58)
     $dh = [math]::Max((S 30), $bottom - $top)
     $px = [math]::Max(20, [math]::Min($dh * 0.82, $W / 3.5))
-    $dc = switch ($st.Level) { 'over' { $C.White } 'critical' { $C.Error } 'notice' { $C.Primary } default { $C.Ink } }
+    $dc = switch ($st.Level) { 'over' { $C.OverInk } 'critical' { $C.Crit } 'notice' { $C.Accent } default { $C.Ink } }
     Draw-Text $g $st.Text (Font-Px $famNum $px $numStyle) $dc 0 $top $W $dh 'Center'
 
     # Coaching line (visible to everyone when the screen is shared)
     $mc = $sub
-    if ($isOver) { $msg = $script:MsgOver; $mc = $C.White }
+    if ($isOver) { $msg = $script:MsgOver; $mc = $C.OverInk }
     elseif ($st.Run -eq 'idle') { $msg = $script:MsgIdle -f (Fmt $st.Budget) }
     elseif ($st.Run -eq 'pause') { $msg = $script:MsgPause }
-    elseif ($st.Level -eq 'critical') { $msg = $script:MsgCritical; $mc = $C.Error }
-    elseif ($st.Level -eq 'notice') { $msg = '핵심만 정리해 주세요.'; $mc = $C.Primary }
+    elseif ($st.Level -eq 'critical') { $msg = $script:MsgCritical; $mc = $C.Crit }
+    elseif ($st.Level -eq 'notice') { $msg = '핵심만 정리해 주세요.'; $mc = $C.Accent }
     else { $msg = '배정 {0}' -f (Fmt $st.Budget) }
     Draw-Text $g $msg (FKM 13) $mc $pad $bottom $cw (S 22) 'Center'
 
@@ -591,27 +618,27 @@ function Paint-Stage($g) {
     $sh = S 6
     $sy = $H - (S 24)
     $segW = ($cw - $gap * ($n - 1)) / $n
-    $track = if ($isOver) { [Drawing.Color]::FromArgb(70, 255, 255, 255) } else { $C.Fog }
+    $track = if ($isOver) { [Drawing.Color]::FromArgb(70, 255, 255, 255) } else { $C.Hair }
     for ($i = 0; $i -lt $n; $i++) {
         $x = $pad + $i * ($segW + $gap)
         Fill-Round $g $track $x $sy $segW $sh (S 3)
         $el = Get-Elapsed $i
         if ($i -eq $script:Idx) {
-            $fill = switch ($st.Level) { 'over' { $C.White } 'critical' { $C.Error } 'notice' { $C.Primary } default { $C.Ink } }
+            $fill = switch ($st.Level) { 'over' { $C.OverInk } 'critical' { $C.Crit } 'notice' { $C.Accent } default { $C.Ink } }
             $ratio = if ($st.Budget -gt 0) { [math]::Min(1.0, $el / $st.Budget) } else { 1.0 }
             Fill-Round $g $fill $x $sy ($segW * $ratio) $sh (S 3)
         } elseif ($el -gt 0) {
             $b = $script:People[$i].Budget
-            $fill = if ($b -gt 0 -and $el -gt $b) { $C.Coral } else { $C.Charcoal }
-            if ($isOver -and $fill -eq $C.Charcoal) { $fill = $C.Rose }
+            $fill = if ($b -gt 0 -and $el -gt $b) { $C.Warn } else { $C.Done }
+            if ($isOver -and $fill -eq $C.Done) { $fill = $C.OverSub }
             Fill-Round $g $fill $x $sy $segW $sh (S 3)
         }
     }
 }
 
 function Paint-Band($g) {
-    $g.Clear($C.Cloud)
-    Draw-HLine $g $C.Fog 0 $band.ClientSize.Width 0
+    $g.Clear($C.Band)
+    Draw-HLine $g $C.Hair 0 $band.ClientSize.Width 0
 }
 
 # ---------------- actions ----------------
@@ -763,13 +790,15 @@ function Show-Settings {
     $dlg.MaximizeBox = $false
     $dlg.MinimizeBox = $false
     $dlg.TopMost = $true
-    $dlg.BackColor = $C.White
+    # Native controls (NumericUpDown, DateTimePicker) cannot be themed cleanly, so this dialog stays light.
+    $L = $Themes.light
+    $dlg.BackColor = $L.Paper
     $dlg.KeyPreview = $true
     $dlg.add_KeyDown({ param($s, $e) if ($e.KeyCode -eq 'Escape') { $s.DialogResult = 'Cancel'; $s.Close() } })
 
-    $title = New-DlgLabel '설정' (FKM 22) $C.Ink 24 20 292 34
+    $title = New-DlgLabel '설정' (FKM 22) $L.Ink 24 20 292 34
 
-    $l1 = New-DlgLabel '발표자 수' (FKM 14) $C.Ink 24 72 140 22
+    $l1 = New-DlgLabel '발표자 수' (FKM 14) $L.Ink 24 72 140 22
     $num = New-Object Windows.Forms.NumericUpDown
     $num.Minimum = 1
     $num.Maximum = 50
@@ -778,7 +807,7 @@ function Show-Settings {
     $num.BorderStyle = 'FixedSingle'
     $num.SetBounds((S 24), (S 98), (S 120), (S 32))
 
-    $l2 = New-DlgLabel '회의 종료 시각' (FKM 14) $C.Ink 172 72 140 22
+    $l2 = New-DlgLabel '회의 종료 시각' (FKM 14) $L.Ink 172 72 140 22
     $dt = New-Object Windows.Forms.DateTimePicker
     $dt.Format = 'Custom'
     $dt.CustomFormat = 'HH:mm'
@@ -787,7 +816,7 @@ function Show-Settings {
     $dt.Value = $script:End
     $dt.SetBounds((S 172), (S 98), (S 120), (S 32))
 
-    $h1 = New-DlgLabel $script:SetHintBase (FK 12) $C.Graphite 24 136 292 48
+    $h1 = New-DlgLabel $script:SetHintBase (FK 12) $L.Sub 24 136 292 48
     $script:SetNum = $num
     $script:SetDt = $dt
     $script:SetHint = $h1
@@ -797,14 +826,14 @@ function Show-Settings {
     $cbTop = New-Object Windows.Forms.CheckBox
     $cbTop.Text = '항상 다른 창 위에 표시'
     $cbTop.Font = FK 14
-    $cbTop.ForeColor = $C.Ink
+    $cbTop.ForeColor = $L.Ink
     $cbTop.Checked = $form.TopMost
     $cbTop.SetBounds((S 24), (S 192), (S 292), (S 26))
 
     $cbSound = New-Object Windows.Forms.CheckBox
     $cbSound.Text = '알림음 사용 (마감 직전, 시간 초과)'
     $cbSound.Font = FK 14
-    $cbSound.ForeColor = $C.Ink
+    $cbSound.ForeColor = $L.Ink
     $cbSound.Checked = $script:Sound
     $cbSound.SetBounds((S 24), (S 222), (S 292), (S 26))
 
@@ -813,13 +842,13 @@ function Show-Settings {
     $restart = New-Button '새 회의 시작' 'quiet' 120 36 {
         $r = [Windows.Forms.MessageBox]::Show($script:SetDlg, "기록을 모두 지우고 종료 시각을 다음 정각으로 되돌립니다.`n진행할까요?", '새 회의', 'YesNo', 'Warning')
         if ($r -eq 'Yes') { $script:SetStartOver = $true; $script:SetDlg.DialogResult = 'OK'; $script:SetDlg.Close() }
-    }
+    } $L
     $restart.Location = New-Object Drawing.Point((S 24), (S 270))
-    $h2 = New-DlgLabel "기록을 지우고, 종료 시각을`n다음 정각으로 되돌립니다." (FK 12) $C.Graphite 156 268 170 40
+    $h2 = New-DlgLabel "기록을 지우고, 종료 시각을`n다음 정각으로 되돌립니다." (FK 12) $L.Sub 156 268 170 40
 
-    $save = New-Button '저장' 'primary' 92 40 { $script:SetDlg.DialogResult = 'OK'; $script:SetDlg.Close() }
+    $save = New-Button '저장' 'primary' 92 40 { $script:SetDlg.DialogResult = 'OK'; $script:SetDlg.Close() } $L
     $save.Location = New-Object Drawing.Point((S 224), (S 348))
-    $cancel = New-Button '취소' 'outline' 84 40 { $script:SetDlg.DialogResult = 'Cancel'; $script:SetDlg.Close() }
+    $cancel = New-Button '취소' 'outline' 84 40 { $script:SetDlg.DialogResult = 'Cancel'; $script:SetDlg.Close() } $L
     $cancel.Location = New-Object Drawing.Point((S 132), (S 348))
 
     $dlg.Controls.AddRange(@($title, $l1, $num, $l2, $dt, $h1, $cbTop, $cbSound, $restart, $h2, $cancel, $save))
@@ -849,6 +878,22 @@ function Show-Settings {
 $btnRun  = New-Button '시작' 'primary' 92 36 { Toggle-Run }
 $btnNext = New-Button '다음' 'ink' 72 36 { Go-Next }
 $band.Controls.AddRange(@($btnRun, $btnNext))
+
+# Switches the main window between the light and dark tables (the settings dialog stays light).
+function Set-Theme([string]$name) {
+    if (-not $Themes.ContainsKey($name)) { return }
+    $script:ThemeName = $name
+    $script:C = $Themes[$name]
+    $form.BackColor = $C.Paper
+    $strip.BackColor = $C.Strip
+    $stage.BackColor = $C.Paper
+    $band.BackColor = $C.Band
+    Set-ButtonKind $btnRun 'primary'
+    Set-ButtonKind $btnNext 'ink'
+    if ($form.IsHandleCreated) { [MtNative]::DarkTitle($form.Handle, ($name -eq 'dark')) }
+    $band.Invalidate()
+    Refresh-All
+}
 
 function Layout-Band {
     $W = $band.ClientSize.Width
@@ -889,6 +934,7 @@ $band.add_Resize({ Layout-Band })
 
 $form.add_Shown({
     Layout-Band
+    if ($script:ThemeName -eq 'dark') { [MtNative]::DarkTitle($form.Handle, $true) }
     Refresh-All
     # A hidden-window launch hides the first window this process shows; undo that.
     if (-not [MtNative]::IsWindowVisible($form.Handle)) { [void][MtNative]::ShowWindow($form.Handle, 5) }
@@ -903,6 +949,7 @@ $form.add_KeyDown({
         'Right' { Go-Next }
         'R'     { Reset-Current }
         'S'     { Show-Settings }
+        'D'     { Set-Theme $(if ($script:ThemeName -eq 'dark') { 'light' } else { 'dark' }); try { Save-Config } catch { } }
         'M'     { $script:Sound = -not $script:Sound }
         default { return }
     }
