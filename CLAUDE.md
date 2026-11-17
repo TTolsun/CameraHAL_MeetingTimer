@@ -16,7 +16,7 @@ There is no build, lint, or test suite.
   ```
   powershell.exe -NoProfile -STA -ExecutionPolicy RemoteSigned -File .\CameraHAL_MeetingTimer.ps1
   ```
-  `-STA` is required (clipboard copy in the summary dialog).
+  `-STA` is required: WinForms needs a single-threaded apartment.
 - Syntax check without launching the UI:
   ```
   $e=$null; [void][System.Management.Automation.Language.Parser]::ParseFile("$PWD\CameraHAL_MeetingTimer.ps1",[ref]$null,[ref]$e); $e
@@ -36,7 +36,7 @@ The script runs top to bottom and ends in `$form.ShowDialog()`. Sections are mar
    - `Lock-Budget` fixes the current speaker's budget (min 30 s) the moment they start. So overruns shrink only the shares of people who have not started.
    - `Get-Phase` derives display level (`normal`/`notice`/`critical`/`over`) with thresholds that scale for short budgets (`min(120, 30%)`, `min(60, 15%)`).
 5. **Render loop**: a 200 ms `Windows.Forms.Timer` calls `Check-Alerts` (sounds, one-shot flags, taskbar flash every 30 s of overtime when the window is in the background) then `Refresh-All`, which invalidates the custom-painted `$strip` (top bar), `$stage` (big timer), and updates button text and the window title (title doubles as the taskbar label while minimized).
-6. **Dialogs**: `Show-Settings` and `Show-Summary` build modal forms inline.
+6. **Dialogs**: `Show-Settings` builds a modal form inline. Finishing the last speaker has no summary dialog; `Go-Next` calls `Start-Over` to begin a fresh meeting.
 
 ## Constraints to preserve
 
