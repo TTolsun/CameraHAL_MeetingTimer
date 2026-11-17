@@ -232,5 +232,27 @@ Set-Count 2
 Check 'shrinking below the current index clamps it' $script:Idx 1
 Check 'shrinking keeps the speaker list valid' $script:People.Count 2
 
+# ---------------- presenter bar ----------------
+Add-Type -AssemblyName System.Drawing
+$script:Scale = 1.0
+$script:BarH = 44
+$bar = Get-BarBounds (New-Object Drawing.Rectangle(1920, 0, 1920, 1040))
+Check 'bar spans the full width of its screen' ("{0},{1},{2}" -f $bar.X, $bar.Y, $bar.Width) '1920,0,1920'
+Check 'bar height' $bar.Height 44
+
+# ---------------- config (untrusted input) ----------------
+$script:ConfigFile = Join-Path ([IO.Path]::GetTempPath()) ('mt-test-{0}.json' -f [guid]::NewGuid())
+function Load-From([string]$json) {
+    [IO.File]::WriteAllText($script:ConfigFile, $json)
+    Load-Config
+}
+Check 'Bar defaults to off' (Load-From '{}').Bar $false
+Check 'Bar true is read' (Load-From '{"Bar": true}').Bar $true
+Check 'Bar as a string is rejected' (Load-From '{"Bar": "yes"}').Bar $false
+Check 'Bar as a number is rejected' (Load-From '{"Bar": 1}').Bar $false
+Check 'a JSON array falls back to defaults' (Load-From '[1,2,3]').Count 6
+Check 'unknown theme falls back' (Load-From '{"Theme": "Dark"}').Theme 'light'
+Remove-Item -LiteralPath $script:ConfigFile -ErrorAction SilentlyContinue
+
 Write-Host ("{0} passed, {1} failed" -f $script:Passes, $script:Fails)
 exit $script:Fails

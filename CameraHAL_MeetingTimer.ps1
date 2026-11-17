@@ -146,6 +146,7 @@ $Themes = @{
         Accent = '#024ad8'; Plus = '#8fb4ff'; Warn = '#ff5050'; Zero = '#636363'
         Crit = '#b3262b'; OverBg = '#b3262b'; OverPulse = '#5a1313'; OverInk = '#ffffff'; OverSub = '#f9d4d2'
         IdleInk = '#3d3d3d'; IdleLine = '#c2c2c2'; Done = '#3d3d3d'
+        BarNotice = '#8fb4ff'; BarCrit = '#ff5050'; BarTrack = '#3d3d3d'
         BtnPrimary = '#024ad8'; BtnPrimaryInk = '#ffffff'; BtnPrimaryHover = '#0340b8'; BtnPrimaryPress = '#0e3191'
         BtnInk = '#1a1a1a'; BtnInkText = '#ffffff'; BtnInkLine = ''; BtnInkHover = '#292929'; BtnInkPress = '#000000'
     }
@@ -157,6 +158,7 @@ $Themes = @{
         Accent = '#57c1ff'; Plus = '#57c1ff'; Warn = '#ff6161'; Zero = '#6a6b6c'
         Crit = '#ff6161'; OverBg = '#a1131a'; OverPulse = '#5a0a0f'; OverInk = '#ffffff'; OverSub = '#f9d4d2'
         IdleInk = '#cdcdcd'; IdleLine = '#434345'; Done = '#8a8a8c'
+        BarNotice = '#57c1ff'; BarCrit = '#ff6161'; BarTrack = '#242728'
         BtnPrimary = '#ffffff'; BtnPrimaryInk = '#000000'; BtnPrimaryHover = '#e8e8e8'; BtnPrimaryPress = '#cfcfcf'
         BtnInk = '#121212'; BtnInkText = '#f4f4f6'; BtnInkLine = '#3a3d3f'; BtnInkHover = '#1c1c1d'; BtnInkPress = '#242728'
     }
@@ -192,7 +194,7 @@ function FN([double]$px)  { Font-Px $famNum ($px * $script:Scale) $numStyle }
 
 # ---------------- config ----------------
 function Load-Config {
-    $cfg = [pscustomobject]@{ Count = 6; Sound = $true; TopMost = $true; Theme = 'light' }
+    $cfg = [pscustomobject]@{ Count = 6; Sound = $true; TopMost = $true; Theme = 'light'; Bar = $false }
     # config.json is treated as untrusted data: plain JSON only (no object
     # deserialization), size-capped, and every field type- and range-checked.
     # Anything unexpected falls back to the defaults above.
@@ -209,6 +211,7 @@ function Load-Config {
         if ($raw -and $raw.Value -is [int] -and [int]::TryParse("$($raw.Value)", [ref]$n) -and $n -ge 1 -and $n -le 50) { $cfg.Count = $n }
         if ($j.Sound -is [bool]) { $cfg.Sound = $j.Sound }
         if ($j.TopMost -is [bool]) { $cfg.TopMost = $j.TopMost }
+        if ($j.Bar -is [bool]) { $cfg.Bar = $j.Bar }
         # Only the two known theme names are accepted; anything else keeps the default.
         if ($j.Theme -is [string] -and ($j.Theme -ceq 'light' -or $j.Theme -ceq 'dark')) { $cfg.Theme = $j.Theme }
     } catch { }
@@ -221,7 +224,9 @@ function Save-Config {
     $json = [pscustomobject]@{
         Speakers = [int]$script:People.Count
         Sound    = [bool]$script:Sound
-        TopMost  = [bool]$form.TopMost
+        # The preference, not $form.TopMost: the presenter bar forces always-on-top.
+        TopMost  = [bool]$script:TopMostPref
+        Bar      = [bool]$script:BarMode
         Theme    = [string]$script:ThemeName
     } | ConvertTo-Json
     [IO.File]::WriteAllText($script:ConfigFile, $json, (New-Object Text.UTF8Encoding $false))
@@ -456,7 +461,9 @@ $form.MinimumSize = New-Object Drawing.Size(((Get-MinClientWidth) + ($form.Width
 $form.MaximizeBox = $false
 $form.StartPosition = 'Manual'
 $form.BackColor = $C.Paper
-$form.TopMost = $script:Cfg.TopMost
+$script:TopMostPref = $script:Cfg.TopMost
+$form.TopMost = $script:TopMostPref
+$script:NormalMin = $form.MinimumSize
 $form.KeyPreview = $true
 $form.Font = FK 13
 try { $form.Icon = [Drawing.Icon]::ExtractAssociatedIcon((Get-Process -Id $PID).Path) } catch { }
@@ -609,7 +616,51 @@ function Paint-Strip($g) {
     Draw-Text $g $pd.Text (FN 14) $pd.Color ($mid - [int]($dw / 2)) 0 ($dw + 2) $H
 }
 
+# Presenter bar: one line on the dark strip color, readable on a shared, downscaled screen.
+# Left: speaker. Center: countdown. Right: state. Bottom edge: progress of the current share.
+function Paint-Bar($g) {
+    $W = $stage.ClientSize.Width; $H = $stage.ClientSize.Height
+    if ($W -lt 50 -or $H -lt 10 -or $script:People.Count -eq 0) { return }
+    $st = Get-Phase
+    $isOver = $st.Level -eq 'over'
+    if ($isOver) {
+        $flash = $st.Run -eq 'run' -and ([int][math]::Floor($st.El * 2) % 2) -eq 1
+        $bg = if ($flash) { $C.OverPulse } else { $C.OverBg }
+        $fg = $C.OverInk; $sub = $C.OverSub
+    } else {
+        $bg = $C.Strip; $fg = $C.StripInk; $sub = $C.StripMute
+    }
+    $g.Clear($bg)
+    $pad = S 16
+    $lineH = $H - (S 4)
+
+    $head = '발표자 {0}' -f ($script:Idx + 1)
+    $hw = Measure-W $head (FKM 15)
+    Draw-Text $g $head (FKM 15) $fg $pad 0 ($hw + 2) $lineH
+    Draw-Text $g (' / {0}명' -f $script:People.Count) (FK 13) $sub ($pad + $hw) 0 (S 80) $lineH
+
+    $dc = switch ($st.Level) { 'over' { $C.OverInk } 'critical' { $C.BarCrit } 'notice' { $C.BarNotice } default { $fg } }
+    Draw-Text $g $st.Text (Font-Px $famNum ($lineH * 0.8) $numStyle) $dc 0 0 $W $lineH 'Center'
+
+    if (Test-UndoHint)          { $msg = $script:MsgUndo }
+    elseif ($isOver)            { $msg = $script:MsgOver }
+    elseif ($st.Run -eq 'idle') { $msg = '대기 · 배정 {0}' -f (Fmt $st.Budget) }
+    elseif ($st.Run -eq 'pause') { $msg = '일시정지' }
+    else                        { $msg = '배정 {0}' -f (Fmt $st.Budget) }
+    $mw = Measure-W $msg (FKM 13)
+    Draw-Text $g $msg (FKM 13) $sub ($W - $pad - $mw) 0 ($mw + 2) $lineH
+
+    $th = S 4
+    $track = if ($isOver) { [Drawing.Color]::FromArgb(70, 255, 255, 255) } else { $C.BarTrack }
+    $b = New-Object Drawing.SolidBrush($track); $g.FillRectangle($b, 0, ($H - $th), $W, $th); $b.Dispose()
+    $ratio = if ($st.Budget -gt 0) { [math]::Min(1.0, $st.El / $st.Budget) } else { 0 }
+    if ($ratio -gt 0) {
+        $b = New-Object Drawing.SolidBrush($dc); $g.FillRectangle($b, 0, ($H - $th), [int]($W * $ratio), $th); $b.Dispose()
+    }
+}
+
 function Paint-Stage($g) {
+    if ($script:BarMode) { Paint-Bar $g; return }
     $W = $stage.ClientSize.Width; $H = $stage.ClientSize.Height
     if ($W -lt 50 -or $H -lt 50 -or $script:People.Count -eq 0) { return }
     $st = Get-Phase
@@ -937,7 +988,7 @@ function Show-Settings {
     $cbTop.Text = '항상 다른 창 위에 표시'
     $cbTop.Font = FK 14
     $cbTop.ForeColor = $L.Ink
-    $cbTop.Checked = $form.TopMost
+    $cbTop.Checked = $script:TopMostPref
     $cbTop.SetBounds((S 24), (S 192), (S 292), (S 26))
 
     $cbSound = New-Object Windows.Forms.CheckBox
@@ -964,7 +1015,8 @@ function Show-Settings {
     $dlg.Controls.AddRange(@($title, $l1, $num, $l2, $dt, $h1, $cbTop, $cbSound, $restart, $h2, $cancel, $save))
 
     if ($dlg.ShowDialog($form) -eq 'OK') {
-        $form.TopMost = $cbTop.Checked
+        $script:TopMostPref = $cbTop.Checked
+        $form.TopMost = $script:TopMostPref -or $script:BarMode
         $script:Sound = $cbSound.Checked
         $script:Cfg.Count = [int]$num.Value
         # A snapshot from before a count or end-time change no longer matches the meeting.
@@ -1058,6 +1110,53 @@ $band.add_MouseClick({
     }
 })
 $stage.add_Paint({ param($s, $e) Paint-Stage $e.Graphics })
+# The bar has no buttons or title bar; double-click (or B / Esc) returns to the normal window.
+$stage.add_DoubleClick({ if ($script:BarMode) { Set-BarMode $false } })
+
+# ---------------- presenter bar ----------------
+# When the facilitator shares the whole screen, the small corner window is hard to read
+# and covers content. Bar mode turns the window into a thin always-on-top strip across
+# the top of the screen it is on, so the countdown is visible to everyone in the call.
+$script:BarMode = $false
+$script:BarH = 44
+$script:NormalBounds = $null
+
+# Bar rectangle for a screen's working area: full width, pinned to the top edge.
+function Get-BarBounds($wa) {
+    New-Object Drawing.Rectangle($wa.Left, $wa.Top, $wa.Width, (S $script:BarH))
+}
+
+function Set-BarMode([bool]$on) {
+    if ($on -eq $script:BarMode) { return }
+    $script:BarMode = $on
+    $form.SuspendLayout()
+    if ($on) {
+        $script:NormalBounds = $form.Bounds
+        $wa = [Windows.Forms.Screen]::FromControl($form).WorkingArea
+        $form.MinimumSize = [Drawing.Size]::Empty
+        $form.FormBorderStyle = 'None'
+        $strip.Visible = $false
+        $band.Visible = $false
+        $form.Bounds = Get-BarBounds $wa
+        $form.TopMost = $true
+    } else {
+        $form.FormBorderStyle = 'Sizable'
+        $strip.Visible = $true
+        $band.Visible = $true
+        $form.MinimumSize = $script:NormalMin
+        if ($script:NormalBounds) { $form.Bounds = $script:NormalBounds } else { Place-Corner }
+        $form.TopMost = $script:TopMostPref
+        if ($form.IsHandleCreated -and $script:ThemeName -eq 'dark') { [MtNative]::DarkTitle($form.Handle, $true) }
+    }
+    $form.ResumeLayout()
+    $stage.Invalidate()
+    Refresh-All
+}
+
+function Toggle-BarMode {
+    Set-BarMode (-not $script:BarMode)
+    try { Save-Config } catch { }
+}
 $band.add_Paint({ param($s, $e) Paint-Band $e.Graphics })
 $band.add_Resize({ Layout-Band })
 
@@ -1081,6 +1180,8 @@ $form.add_KeyDown({
         'S'     { Show-Settings }
         'D'     { Choose-Theme $(if ($script:ThemeName -eq 'dark') { 'light' } else { 'dark' }) }
         'M'     { $script:Sound = -not $script:Sound }
+        'B'     { Toggle-BarMode }
+        'Escape' { if ($script:BarMode) { Toggle-BarMode } else { return } }
         default { return }
     }
     $e.Handled = $true
@@ -1100,6 +1201,8 @@ $form.add_FormClosing({
 # ---------------- start ----------------
 Start-Over
 Place-Corner
+# Reopen as the presenter bar if that is how the timer was closed last time.
+if ($script:Cfg.Bar) { Set-BarMode $true }
 $timer.Start()
 [void]$form.ShowDialog()
 $form.Dispose()
