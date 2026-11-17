@@ -485,7 +485,7 @@ function Paint-Stage($g) {
     # Change versus the first plan, right above the digits: + is accent blue, - is coral.
     $delta = if ($script:Plan -gt 0) { [math]::Round(($st.Budget - $script:Plan) / 10) * 10 } else { 0 }
     if ($delta -gt 0)     { $dt = '+' + (Fmt $delta); $dcol = if ($isOver) { $C.White } else { $C.Primary } }
-    elseif ($delta -lt 0) { $dt = '-' + (Fmt $delta); $dcol = if ($isOver) { $C.White } else { $C.Coral } }
+    elseif ($delta -lt 0) { $dt = '-' + (Fmt $delta); $dcol = if ($isOver) { $C.Rose } else { $C.Coral } }
     else                  { $dt = '±00:00'; $dcol = $sub }
     Draw-Text $g $dt (FKM 14) $dcol $pad (S 38) $cw (S 22) 'Center'
 
