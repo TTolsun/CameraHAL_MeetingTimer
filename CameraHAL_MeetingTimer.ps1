@@ -384,11 +384,35 @@ function New-Button([string]$text, [string]$kind, [int]$w, [int]$h, [scriptblock
     $b
 }
 
+# ---------------- minimum size ----------------
+# Coaching lines under the digits. Kept short on purpose: the longest one sets the window's minimum width.
+$script:MsgOver = '마무리해 주세요.'
+$script:MsgIdle = '배정 {0} · Space로 시작'
+$script:MsgPause = '일시정지 · Space로 계속'
+$script:MsgCritical = '곧 끝납니다. 마무리해 주세요.'
+# Width the top strip needs for a given variant: clock, end time, tail text and the gear.
+function Get-StripNeed([bool]$labels, [string]$tail) {
+    $need = (S 16) + (Measure-W '00:00' (FN 14)) + (S 12) + (S 36) + (S 4) + (S 10) + (Measure-W $tail (FK 12)) + (Measure-W '00:00' (FN 14))
+    if ($labels) { $need += (Measure-W '현재' (FK 12)) + (Measure-W '종료' (FK 12)) + (S 12) }
+    $need
+}
+
+# Narrowest client width at which nothing important is cut off. Measured from the real
+# fonts, so a missing Pretendard (falls back to Malgun Gothic) still gets a safe value.
+function Get-MinClientWidth {
+    $topBar = Get-StripNeed $false '초과 예상'
+    $band = (S 16) + (S 92) + (S 6) + (S 72) + (S 16)
+    $head = (S 20) * 2 + (Measure-W '발표자 50' (FKM 16)) + (Measure-W ' / 50명' (FK 13)) + (Measure-W '시간 초과' (FKM 12)) + (S 18)
+    $msgs = @($script:MsgOver, $script:MsgPause, ($script:MsgIdle -f '00:00'), $script:MsgCritical)
+    $coach = (S 20) * 2 + (($msgs | ForEach-Object { Measure-W $_ (FKM 13) } | Measure-Object -Maximum).Maximum)
+    [math]::Max([math]::Max($topBar, $band), [math]::Max($head, $coach))
+}
+
 # ---------------- window ----------------
 $form = New-Object Windows.Forms.Form
 $form.Text = 'CameraHAL_MeetingTimer'
 $form.ClientSize = New-Object Drawing.Size((S 380), (S 290))
-$form.MinimumSize = New-Object Drawing.Size((S 340), (S 290))
+$form.MinimumSize = New-Object Drawing.Size(((Get-MinClientWidth) + ($form.Width - $form.ClientSize.Width)), (S 290))
 $form.MaximizeBox = $false
 $form.StartPosition = 'Manual'
 $form.BackColor = $C.White
@@ -420,36 +444,75 @@ $timer = New-Object Windows.Forms.Timer
 $timer.Interval = 200
 
 # ---------------- painting ----------------
+function Paint-Gear($g, [int]$cx, [int]$cy, $color, $bg) {
+    $g.SmoothingMode = 'AntiAlias'
+    $pen = New-Object Drawing.Pen($color, [single](3 * $script:Scale))
+    for ($k = 0; $k -lt 8; $k++) {
+        $a = $k * [math]::PI / 4
+        $g.DrawLine($pen, [single]($cx + [math]::Cos($a) * (S 5)), [single]($cy + [math]::Sin($a) * (S 5)),
+                          [single]($cx + [math]::Cos($a) * (S 8.5)), [single]($cy + [math]::Sin($a) * (S 8.5)))
+    }
+    $pen.Dispose()
+    $b = New-Object Drawing.SolidBrush($color)
+    $g.FillEllipse($b, ($cx - (S 6.5)), ($cy - (S 6.5)), (S 13), (S 13))
+    $b.Dispose()
+    $b = New-Object Drawing.SolidBrush($bg)
+    $g.FillEllipse($b, ($cx - (S 2.5)), ($cy - (S 2.5)), (S 5), (S 5))
+    $b.Dispose()
+    $g.SmoothingMode = 'None'
+}
+
 function Paint-Strip($g) {
     $W = $strip.ClientSize.Width; $H = $strip.ClientSize.Height
     if ($W -lt 10) { return }
     $g.Clear($C.Ink)
-    $x = S 16
-    $lw = Measure-W '현재' (FK 12)
-    Draw-Text $g '현재' (FK 12) $C.Steel $x 0 ($lw + 2) $H
-    Draw-Text $g ((Get-Date).ToString('HH:mm')) (FN 14) $C.White ($x + $lw + (S 6)) 0 (S 60) $H
+
+    # Settings gear at the right edge; it also decides how much room the text gets.
+    $gw = S 36
+    $script:GearRect = New-Object Drawing.Rectangle(($W - $gw), 0, $gw, $H)
+    $gbg = if ($script:GearHot) { $C.InkSoft } else { $C.Ink }
+    if ($script:GearHot) { $gb = New-Object Drawing.SolidBrush($gbg); $g.FillRectangle($gb, $script:GearRect); $gb.Dispose() }
+    Paint-Gear $g ($W - [int]($gw / 2)) ([int]($H / 2)) $(if ($script:GearHot) { $C.White } else { $C.Steel }) $gbg
 
     $left = Get-MeetingLeft
     if ($left -gt 0 -and (Test-Overbooked)) {
-        $tail = '종료 시각 초과 예상'
-        $tc = $C.Coral
+        $tailFull = '종료 시각 초과 예상'; $tailShort = '초과 예상'; $tc = $C.Coral
     } elseif ($left -gt 0) {
-        $tail = '{0}분 남음' -f [int][math]::Ceiling($left / 60)
-        $tc = $C.Steel
+        $m = [int][math]::Ceiling($left / 60)
+        $tailFull = '{0}분 남음' -f $m; $tailShort = '{0}분' -f $m; $tc = $C.Steel
     } else {
-        $tail = '회의 시간 종료'
-        $tc = $C.Coral
+        $tailFull = '회의 시간 종료'; $tailShort = '회의 종료'; $tc = $C.Coral
     }
-    $right = $W - (S 16)
-    $tw = Measure-W $tail (FK 12)
-    Draw-Text $g $tail (FK 12) $tc ($right - $tw) 0 ($tw + 2) $H
+
+    # Pick the richest variant that fits: full text, short tail, then no "현재"/"종료" labels.
+    $variants = @(
+        @{ Labels = $true;  Tail = $tailFull },
+        @{ Labels = $true;  Tail = $tailShort },
+        @{ Labels = $false; Tail = $tailShort })
+    $pick = $variants[2]
+    foreach ($v in $variants) {
+        if ((Get-StripNeed $v.Labels $v.Tail) -le $W) { $pick = $v; break }
+    }
+
+    $x = S 16
+    if ($pick.Labels) {
+        $lw = Measure-W '현재' (FK 12)
+        Draw-Text $g '현재' (FK 12) $C.Steel $x 0 ($lw + 2) $H
+        $x += $lw + (S 6)
+    }
+    Draw-Text $g ((Get-Date).ToString('HH:mm')) (FN 14) $C.White $x 0 (S 60) $H
+
+    $right = $W - $gw - (S 4)
+    $tw = Measure-W $pick.Tail (FK 12)
+    Draw-Text $g $pick.Tail (FK 12) $tc ($right - $tw) 0 ($tw + 2) $H
     $right -= $tw + (S 10)
-    $endText = $script:End.ToString('HH:mm')
-    $ew = Measure-W $endText (FN 14)
-    Draw-Text $g $endText (FN 14) $C.White ($right - $ew) 0 ($ew + 2) $H
-    $right -= $ew + (S 6)
-    $kw = Measure-W '종료' (FK 12)
-    Draw-Text $g '종료' (FK 12) $C.Steel ($right - $kw) 0 ($kw + 2) $H
+    $ew = Measure-W $script:End.ToString('HH:mm') (FN 14)
+    Draw-Text $g $script:End.ToString('HH:mm') (FN 14) $C.White ($right - $ew) 0 ($ew + 2) $H
+    if ($pick.Labels) {
+        $right -= $ew + (S 6)
+        $kw = Measure-W '종료' (FK 12)
+        Draw-Text $g '종료' (FK 12) $C.Steel ($right - $kw) 0 ($kw + 2) $H
+    }
 }
 
 function Paint-Stage($g) {
@@ -498,10 +561,10 @@ function Paint-Stage($g) {
 
     # Coaching line (visible to everyone when the screen is shared)
     $mc = $sub
-    if ($isOver) { $msg = '시간이 초과되었습니다. 마무리해 주세요.'; $mc = $C.White }
-    elseif ($st.Run -eq 'idle') { $msg = '배정 {0} · Space를 누르면 시작합니다' -f (Fmt $st.Budget) }
-    elseif ($st.Run -eq 'pause') { $msg = '일시정지됨 · Space를 누르면 이어서 진행합니다' }
-    elseif ($st.Level -eq 'critical') { $msg = '곧 끝납니다. 마무리해 주세요.'; $mc = $C.Error }
+    if ($isOver) { $msg = $script:MsgOver; $mc = $C.White }
+    elseif ($st.Run -eq 'idle') { $msg = $script:MsgIdle -f (Fmt $st.Budget) }
+    elseif ($st.Run -eq 'pause') { $msg = $script:MsgPause }
+    elseif ($st.Level -eq 'critical') { $msg = $script:MsgCritical; $mc = $C.Error }
     elseif ($st.Level -eq 'notice') { $msg = '핵심만 정리해 주세요.'; $mc = $C.Primary }
     else { $msg = '배정 {0}' -f (Fmt $st.Budget) }
     Draw-Text $g $msg (FKM 13) $mc $pad $bottom $cw (S 22) 'Center'
@@ -868,8 +931,7 @@ function Show-Settings {
 # ---------------- controls ----------------
 $btnRun  = New-Button '시작' 'primary' 92 36 { Toggle-Run }
 $btnNext = New-Button '다음' 'ink' 72 36 { Go-Next }
-$btnSet  = New-Button '설정' 'quiet' 60 36 { Show-Settings }
-$band.Controls.AddRange(@($btnRun, $btnNext, $btnSet))
+$band.Controls.AddRange(@($btnRun, $btnNext))
 
 function Layout-Band {
     $W = $band.ClientSize.Width
@@ -879,11 +941,31 @@ function Layout-Band {
         $b.Location = New-Object Drawing.Point($x, $y)
         $x += $b.Width + (S 6)
     }
-    $btnSet.Location = New-Object Drawing.Point(($W - (S 16) - $btnSet.Width), $y)
 }
 
 # ---------------- events ----------------
 $strip.add_Paint({ param($s, $e) Paint-Strip $e.Graphics })
+# The gear is painted, not a control, so hit-test it by hand.
+$script:GearRect = [Drawing.Rectangle]::Empty
+$script:GearHot = $false
+$gearTip = New-Object Windows.Forms.ToolTip
+$strip.add_MouseMove({
+    param($s, $e)
+    $hot = $script:GearRect.Contains($e.Location)
+    if ($hot -ne $script:GearHot) {
+        $script:GearHot = $hot
+        $strip.Cursor = if ($hot) { [Windows.Forms.Cursors]::Hand } else { [Windows.Forms.Cursors]::Default }
+        $gearTip.SetToolTip($strip, $(if ($hot) { '설정 (S)' } else { '' }))
+        $strip.Invalidate()
+    }
+})
+$strip.add_MouseLeave({
+    if ($script:GearHot) { $script:GearHot = $false; $strip.Cursor = [Windows.Forms.Cursors]::Default; $strip.Invalidate() }
+})
+$strip.add_MouseClick({
+    param($s, $e)
+    if ($e.Button -eq 'Left' -and $script:GearRect.Contains($e.Location)) { Show-Settings }
+})
 $stage.add_Paint({ param($s, $e) Paint-Stage $e.Graphics })
 $band.add_Paint({ param($s, $e) Paint-Band $e.Graphics })
 $band.add_Resize({ Layout-Band })
