@@ -10,7 +10,13 @@ The user-facing README is in Korean. Code comments and commit messages are in En
 
 ## Commands
 
-There is no build, lint, or test suite.
+There is no build or lint step.
+
+- Test the time model (no Pester, nothing to install; exit code = number of failures):
+  ```
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\TimeModel.Tests.ps1
+  ```
+  It lifts every top-level function out of the script with the PowerShell parser (the window is never built), shadows `Get-Date` with a fake clock and swaps `$script:Sw` for a stopwatch double. So keep time logic in top-level functions, read the clock only through argument-less `Get-Date` and `$script:Sw`, and add a scenario there whenever the sharing rules change.
 
 - Run: double-click `CameraHAL_MeetingTimer.bat`, or from a shell:
   ```
@@ -33,10 +39,12 @@ The script runs top to bottom and ends in `$form.ShowDialog()`. Sections are mar
 4. **Time-sharing model** (the core logic):
    - A speaker's elapsed time = their committed `Used` + `Sw.Elapsed` if they are current. `Commit-Current` folds the stopwatch into `Used` and resets it; call it before changing `Idx`.
    - `Budget = 0` means "not locked yet". `Get-Preview` computes the share for unlocked speakers: (meeting time left − current locked speaker's remaining budget) / number of unlocked speakers from `Idx` onward, rounded down to whole seconds. It is re-evaluated on every tick, so a speaker who has not started yet sees the share follow the clock second by second.
-   - `Lock-Budget` fixes the current speaker's budget (min 30 s) the moment they start. So overruns shrink only the shares of people who have not started.
+   - `Lock-Budget` fixes the current speaker's budget (min `$script:MinShare` = 60 s) the moment they start. So overruns shrink only the shares of people who have not started.
    - `Get-Phase` derives display level (`normal`/`notice`/`critical`/`over`) with thresholds that scale for short budgets (`min(120, 30%)`, `min(60, 15%)`).
 5. **Render loop**: a 200 ms `Windows.Forms.Timer` calls `Check-Alerts` (sounds, one-shot flags, taskbar flash every 30 s of overtime when the window is in the background) then `Refresh-All`, which invalidates the custom-painted `$strip` (top bar), `$stage` (big timer), and updates button text and the window title (title doubles as the taskbar label while minimized).
 6. **Dialogs**: `Show-Settings` builds a modal form inline. Finishing the last speaker has no summary dialog; `Go-Next` calls `Start-Over` to begin a fresh meeting.
+7. **Undo** (Ctrl+Z): `Go-Next` and `Reset-Current` call `Save-Undo` first (a copy of `People`, `Idx`, `End`, `Plan`, and whether the clock ran). `Undo-Last` restores it and, if the clock was running, gives the time since then to the restored speaker. One level only; saving settings clears it. This replaces a confirmation dialog on purpose: nothing interrupts the meeting, but a mis-pressed N/→ is recoverable.
+8. **Default end** (`Get-NextHour`): the next full hour, or the one after when it is less than 10 minutes away.
 
 ## Constraints to preserve
 
@@ -45,4 +53,4 @@ The script runs top to bottom and ends in `$form.ShowDialog()`. Sections are mar
 - README promises no network access, admin rights, registry writes, or downloads.
 - `.bat`, `.ps1`, `.md` must keep CRLF line endings (enforced by `.gitattributes`). The `.ps1` starts with a UTF-8 BOM, which PowerShell 5.1 needs to read the Korean strings correctly; keep it.
 - Visual style follows the HP-inspired DESIGN.md (getdesign.md/hp): white canvas, `#1a1a1a` ink, single accent `#024ad8`, 4px radius buttons, 1px hairlines. Colors are named by role (`Paper`, `Ink`, `Strip`, `Accent`, `Crit`, ...) in two tables, `$Themes.light` and `$Themes.dark` (dark follows getdesign.md/raycast); `$C` is the active one and `Set-Theme` swaps it. Never hardcode a hue name or hex in painting code: add a role to both tables. The settings dialog is pinned to `$Themes.light` (native controls cannot be themed) and passes that table to `New-Button`.
-- Keyboard shortcuts (Space, N/→, R, S, M, D) are documented in README; update it when they change.
+- Keyboard shortcuts (Space, N/→, R, Ctrl+Z, S, M, D) are documented in README; update it when they change.

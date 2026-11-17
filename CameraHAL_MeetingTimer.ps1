@@ -227,9 +227,13 @@ function Save-Config {
     [IO.File]::WriteAllText($script:ConfigFile, $json, (New-Object Text.UTF8Encoding $false))
 }
 
+# Default meeting end: the next full hour, or the one after it when the next one is less
+# than 10 minutes away (opening the timer at 13:55 for a 14:00 meeting gives 15:00, not 14:00).
 function Get-NextHour {
     $now = Get-Date
-    $now.Date.AddHours($now.Hour + 1)
+    $end = $now.Date.AddHours($now.Hour + 1)
+    if (($end - $now).TotalMinutes -lt 10) { $end = $end.AddHours(1) }
+    $end
 }
 
 $script:Cfg = Load-Config
@@ -418,6 +422,7 @@ $script:MsgOver = '마무리해 주세요.'
 $script:MsgIdle = '배정 {0} · Space로 시작'
 $script:MsgPause = '일시정지 · Space로 계속'
 $script:MsgCritical = '곧 끝납니다. 마무리해 주세요.'
+$script:MsgUndo = 'Ctrl+Z로 되돌리기'
 # Bottom row sizes (logical px): Start/Next buttons, then the theme and settings icons at the right edge.
 $script:RunW = 88
 $script:NextW = 64
@@ -438,7 +443,7 @@ function Get-MinClientWidth {
     $topBar = Get-StripNeed $false '초과 예상'
     $band = (S 16) + (S $script:RunW) + (S 6) + (S $script:NextW) + (S 10) + 3 * (S $script:IconW) + 2 * (S $script:IconGap) + (S 8)
     $head = (S 20) * 2 + (Measure-W '발표자 50' (FKM 16)) + (Measure-W ' / 50명' (FK 13)) + (Measure-W '시간 초과' (FKM 12)) + (S 18)
-    $msgs = @($script:MsgOver, $script:MsgPause, ($script:MsgIdle -f '00:00'), $script:MsgCritical)
+    $msgs = @($script:MsgOver, $script:MsgPause, ($script:MsgIdle -f '00:00'), $script:MsgCritical, $script:MsgUndo)
     $coach = (S 20) * 2 + (($msgs | ForEach-Object { Measure-W $_ (FKM 13) } | Measure-Object -Maximum).Maximum)
     [math]::Max([math]::Max($topBar, $band), [math]::Max($head, $coach))
 }
@@ -644,6 +649,7 @@ function Paint-Stage($g) {
     # Coaching line (visible to everyone when the screen is shared)
     $mc = $sub
     if ($isOver) { $msg = $script:MsgOver; $mc = $C.OverInk }
+    elseif (Test-UndoHint) { $msg = $script:MsgUndo; $mc = $C.Accent }
     elseif ($st.Run -eq 'idle') { $msg = $script:MsgIdle -f (Fmt $st.Budget) }
     elseif ($st.Run -eq 'pause') { $msg = $script:MsgPause }
     elseif ($st.Level -eq 'critical') { $msg = $script:MsgCritical; $mc = $C.Crit }
@@ -753,6 +759,7 @@ function Toggle-Run {
 function Go-Next {
     # Same rule as the button (also covers N and the right arrow): the speaker must have started.
     if ($script:People[$script:Idx].Budget -eq 0) { return }
+    Save-Undo
     if ($script:Idx -ge $script:People.Count - 1) {
         # Finishing ends the meeting: no summary, go straight to a fresh one.
         Commit-Current
@@ -765,6 +772,9 @@ function Go-Next {
 # Clears the current speaker's clock and share (e.g. after an accidental start).
 function Reset-Current {
     $wasRunning = $script:Sw.IsRunning
+    # Nothing to clear: keep any earlier undo instead of overwriting it with a no-op.
+    if (-not $wasRunning -and (Get-Elapsed $script:Idx) -eq 0 -and $script:People[$script:Idx].Budget -eq 0) { return }
+    Save-Undo
     $script:Sw.Reset()
     $script:People[$script:Idx] = New-Person
     if ($wasRunning) { Lock-Budget; $script:Sw.Start() }
@@ -794,6 +804,43 @@ function Start-Over {
     $script:EndFlashed = $false
     $script:Plan = 0.0
     Refresh-All
+}
+
+# ---------------- undo ----------------
+# One level of undo for the keys that cannot be taken back otherwise: Next (including the
+# finish that starts a fresh meeting) and Reset. The time that passed since then belongs to
+# the speaker who was talking, so it is given back to them if their clock was running.
+$script:Undo = $null
+function Save-Undo {
+    $copy = @($script:People | ForEach-Object { $_.PSObject.Copy() })
+    # Fold the running stopwatch into the copy, the same way Commit-Current would.
+    $copy[$script:Idx].Used = Get-Elapsed $script:Idx
+    $script:Undo = [pscustomobject]@{
+        People = $copy; Idx = $script:Idx; End = $script:End; EndFlashed = $script:EndFlashed
+        Plan = $script:Plan; Running = $script:Sw.IsRunning; At = Get-Date
+    }
+}
+
+function Undo-Last {
+    $u = $script:Undo
+    if (-not $u) { return }
+    $script:Undo = $null
+    $script:Sw.Reset()
+    $script:People = $u.People
+    $script:Idx = $u.Idx
+    $script:End = $u.End
+    $script:EndFlashed = $u.EndFlashed
+    $script:Plan = $u.Plan
+    if ($u.Running) {
+        $script:People[$script:Idx].Used += [math]::Max(0, ((Get-Date) - $u.At).TotalSeconds)
+        $script:Sw.Start()
+    }
+    Refresh-All
+}
+
+# True for a few seconds after an undoable action, so the coaching line can offer Ctrl+Z.
+function Test-UndoHint {
+    $script:Undo -and ((Get-Date) - $script:Undo.At).TotalSeconds -lt 10
 }
 
 function Place-Corner {
@@ -913,6 +960,8 @@ function Show-Settings {
         $form.TopMost = $cbTop.Checked
         $script:Sound = $cbSound.Checked
         $script:Cfg.Count = [int]$num.Value
+        # A snapshot from before a count or end-time change no longer matches the meeting.
+        $script:Undo = $null
         if ($script:SetStartOver) {
             Start-Over
         } else {
@@ -1021,6 +1070,7 @@ $form.add_KeyDown({
         'N'     { Go-Next }
         'Right' { Go-Next }
         'R'     { Reset-Current }
+        'Z'     { if ($e.Control) { Undo-Last } else { return } }
         'S'     { Show-Settings }
         'D'     { Choose-Theme $(if ($script:ThemeName -eq 'dark') { 'light' } else { 'dark' }) }
         'M'     { $script:Sound = -not $script:Sound }
