@@ -162,6 +162,10 @@ public class MtButton : Button {
                     g.DrawRectangle(pen, x-r, y-r*0.8f, r*2, r*1.6f);
                     g.DrawLine(pen, x-r, y-r*0.25f, x+r, y-r*0.25f);
                     break;
+                case "presenter-bar":
+                    g.DrawRectangle(pen, x-r, y-r*0.8f, r*2, r*1.6f);
+                    g.FillRectangle(brush, x-r, y+r*0.25f, r*2, r*0.55f);
+                    break;
             }
         }
         g.SmoothingMode = SmoothingMode.None;
@@ -649,11 +653,15 @@ function Paint-Bar($g) {
         $head = '{0} / {1}명' -f ($script:Idx + 1), $script:People.Count
         Draw-Text $g $head (FKM 15) $fg $pad 0 $headW ($H - (S 4))
         Draw-Text $g $st.Text (FN 32) $dc ($pad + $headW) 0 $clockW ($H - (S 4)) 'Center'
-        $messageX = $pad + $headW + $clockW + (S 12)
-        $messageW = $btnBarRun.Left - $messageX - (S 12)
+        $messageX = $pad + $headW + $clockW + (S 4)
+        $messageW = $btnBarRun.Left - $messageX - (S 8)
         if ($messageW -gt (S 40)) {
-            $messageRect = New-Object Drawing.Rectangle($messageX, (S 2), $messageW, ($H - (S 8)))
-            [Windows.Forms.TextRenderer]::DrawText($g, $msg, (FKM 12), $messageRect, $fg, [Windows.Forms.TextFormatFlags]'WordBreak, VerticalCenter, EndEllipsis, NoPadding')
+            if ($st.Run -eq 'pause') {
+                Draw-Text $g $msg (FKM 12) $fg $messageX 0 $messageW ($H - (S 4))
+            } else {
+                $messageRect = New-Object Drawing.Rectangle($messageX, (S 2), $messageW, ($H - (S 8)))
+                [Windows.Forms.TextRenderer]::DrawText($g, $msg, (FKM 12), $messageRect, $fg, [Windows.Forms.TextFormatFlags]'WordBreak, VerticalCenter, EndEllipsis, NoPadding')
+            }
         }
     }
     $th = S 4
@@ -1131,10 +1139,11 @@ $btnRun  = New-Button '시작' 'primary' $script:RunW 36 { Toggle-Run }
 $btnNext = New-Button '다음' 'ink' $script:NextW 36 { Go-Next }
 $btnUndo = New-Button '되돌리기' 'quiet' 68 36 { Undo-Last }
 $btnSet = New-Button '설정' 'quiet' 52 36 { Show-Settings }
-$btnBar = New-Button '발표 막대' 'quiet' 104 30 { Toggle-BarMode }
 $btnLight = New-Button '☀' 'quiet' 32 30 { Choose-Theme 'light' }
 $btnDark = New-Button '☾' 'quiet' 32 30 { Choose-Theme 'dark' }
-$normalButtons = @($btnRun,$btnNext,$btnUndo,$btnSet,$btnBar,$btnLight,$btnDark)
+$btnBar = New-Button '발표 막대' 'quiet' 32 30 { Toggle-BarMode }
+$btnBar.Glyph = 'presenter-bar'
+$normalButtons = @($btnRun,$btnNext,$btnUndo,$btnSet,$btnLight,$btnDark,$btnBar)
 $band.Controls.AddRange($normalButtons)
 $tips = New-Object Windows.Forms.ToolTip
 $tab = 0
@@ -1191,9 +1200,12 @@ function Layout-Band {
         $x += $button.Width + (S 6)
     }
     $btnSet.Location = New-Object Drawing.Point(($band.ClientSize.Width - (S 16) - $btnSet.Width), (S 10))
-    $btnBar.Location = New-Object Drawing.Point((S 16), (S 54))
-    $btnLight.Location = New-Object Drawing.Point(($band.ClientSize.Width - (S 16) - 2 * $btnLight.Width - (S 4)), (S 54))
-    $btnDark.Location = New-Object Drawing.Point(($band.ClientSize.Width - (S 16) - $btnDark.Width), (S 54))
+    $right = $band.ClientSize.Width - (S 16)
+    foreach ($button in @($btnBar,$btnDark,$btnLight)) {
+        $right -= $button.Width
+        $button.Location = New-Object Drawing.Point($right, (S 54))
+        $right -= S 4
+    }
 }
 
 # ---------------- events ----------------

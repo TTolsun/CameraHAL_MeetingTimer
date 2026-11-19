@@ -6,6 +6,8 @@ $repo = Split-Path -Parent $PSScriptRoot
 $source = [IO.File]::ReadAllText((Join-Path $repo 'CameraHAL_MeetingTimer.ps1'))
 $bootstrap = $source.Substring(0, $source.IndexOf('# ---------------- start ----------------'))
 $bootstrap = $bootstrap.Replace('$dlg.ShowDialog($form)', '(Invoke-TestDialog $dlg)')
+# Feed screen coordinates to the real handlers without moving the desktop cursor.
+$bootstrap = $bootstrap.Replace('[Windows.Forms.Cursor]::Position', '$script:TestCursorPosition')
 $testDirectory = Join-Path $repo ('.ui-test-' + [guid]::NewGuid().ToString('N'))
 [void][IO.Directory]::CreateDirectory($testDirectory)
 $bootstrapPath = Join-Path $testDirectory 'Application.ps1'
@@ -29,6 +31,11 @@ public static class TimerTestInput {
     public static void Click(Control control) {
         typeof(Control).GetMethod("OnClick", BindingFlags.Instance | BindingFlags.NonPublic)
             .Invoke(control, new object[] { EventArgs.Empty });
+    }
+    public static void Mouse(Control control, string phase) {
+        MouseEventArgs args = new MouseEventArgs(MouseButtons.Left, 1, 0, 0, 0);
+        typeof(Control).GetMethod("OnMouse" + phase, BindingFlags.Instance | BindingFlags.NonPublic)
+            .Invoke(control, new object[] { args });
     }
 }
 '@
@@ -117,6 +124,7 @@ try {
         Assert ($button -is [Windows.Forms.IButtonControl] -and $button.TabStop) 'Actions must use keyboard-accessible native buttons'
     }
     Assert ($btnBar.Text -eq '발표 막대' -and $btnBarBack.Text -eq '기본 창') 'Mode controls need explicit labels'
+    Assert ($btnBar.Glyph -eq 'presenter-bar') 'Presenter entry is rendered as an icon'
     $normalBounds = $form.Bounds
     $topMost = $script:TopMostPref
     [TimerTestInput]::Click($btnBar)
@@ -127,14 +135,31 @@ try {
     foreach ($button in $barButtons) { Assert (-not [string]::IsNullOrEmpty($button.Glyph)) 'Presenter actions have icons and retain native text for accessibility' }
     $centerX = [int](($workingArea.Left + $workingArea.Right) / 2)
     $centerY = [int](($workingArea.Top + $workingArea.Bottom) / 2)
+    $originalBounds = $form.Bounds
+    $script:TestCursorPosition = New-Object Drawing.Point(($form.Left + (S 20)), ($form.Top + (S 20)))
+    [TimerTestInput]::Mouse($stage, 'Down')
+    [TimerTestInput]::Mouse($stage, 'Move')
+    [TimerTestInput]::Mouse($stage, 'Up')
+    Assert ($null -eq $script:BarDrag -and $form.Bounds -eq $originalBounds) 'Clicking empty bar space leaves docking unchanged'
     foreach ($drop in @(
         @($centerX, $workingArea.Top, 'top'),
         @($workingArea.Left, $centerY, 'left'),
         @(($workingArea.Right - 1), $centerY, 'right'),
         @($centerX, ($workingArea.Bottom - 1), 'bottom'))) {
-        Dock-Bar (New-Object Drawing.Point($drop[0], $drop[1]))
-        Assert ($script:BarEdge -eq $drop[2]) 'Drop handler selects the nearest screen edge'
-        Assert ((Load-Config).BarEdge -eq $drop[2]) 'Drop handler persists the chosen edge'
+        $start = New-Object Drawing.Point(($form.Left + (S 20)), ($form.Top + (S 20)))
+        $origin = $form.Location
+        $script:TestCursorPosition = $start
+        [TimerTestInput]::Mouse($stage, 'Down')
+        Assert ($null -ne $script:BarDrag -and -not $script:BarDrag.Moving) 'Mouse down records the drag origin'
+        $script:TestCursorPosition = New-Object Drawing.Point($drop[0], $drop[1])
+        [TimerTestInput]::Mouse($stage, 'Move')
+        $expectedMove = New-Object Drawing.Point(($origin.X + $drop[0] - $start.X), ($origin.Y + $drop[1] - $start.Y))
+        Assert ($script:BarDrag.Moving -and $form.Location -eq $expectedMove) 'Bar follows the simulated pointer during drag'
+        [TimerTestInput]::Mouse($stage, 'Up')
+        Assert ($null -eq $script:BarDrag -and -not $stage.Capture) 'Mouse up clears drag state and capture'
+        Assert ($script:BarEdge -eq $drop[2]) "Drag docks to the $($drop[2]) edge"
+        Assert ($form.Bounds -eq (Get-BarBounds $workingArea $drop[2])) "Drag positions the bar at the $($drop[2]) edge"
+        Assert ((Load-Config).BarEdge -eq $drop[2]) "Drag persists the $($drop[2]) edge"
     }
     [TimerTestInput]::Click($btnBarRun)
     Assert $script:Sw.IsRunning 'Presenter start button runs the clock'
@@ -211,6 +236,9 @@ try {
         if ($RenderDirectory) { Save-MainRender ($theme + '-bar-compact') }
         $script:People[0].Started = $true
         $script:People[0].Budget = 100
+        $script:People[0].Used = 15
+        Refresh-All
+        if ($RenderDirectory) { Save-MainRender ($theme + '-bar-paused') }
         $script:People[0].Used = 70
         $script:Sw.Restart()
         Refresh-All
@@ -236,7 +264,8 @@ try {
     $form.ClientSize = New-Object Drawing.Size((Get-MinClientWidth), (S 290))
     Layout-Band
     Assert ($btnUndo.Right -lt $btnSet.Left) 'Main actions fit minimum width'
-    Assert ($btnBar.Right -lt $btnLight.Left) 'Mode entry and theme buttons fit minimum width'
+    Assert ($btnLight.Right -lt $btnDark.Left -and $btnDark.Right -lt $btnBar.Left -and $btnBar.Right -le $band.ClientSize.Width) 'Theme and presenter icons fit in order at minimum width'
+    Assert ($btnLight.Top -eq $btnBar.Top -and $btnDark.Top -eq $btnBar.Top) 'Presenter icon shares the theme row'
     if ($RenderDirectory) { Save-MainRender 'minimum' }
     Write-Host ("{0} native UI checks passed" -f $script:Checks)
 } finally {
