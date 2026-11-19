@@ -13,9 +13,10 @@ $testDirectory = Join-Path $repo ('.ui-test-' + [guid]::NewGuid().ToString('N'))
 $bootstrapPath = Join-Path $testDirectory 'Application.ps1'
 [IO.File]::WriteAllText($bootstrapPath, $bootstrap, (New-Object Text.UTF8Encoding $true))
 . $bootstrapPath
-Add-Type -ReferencedAssemblies System.Windows.Forms -TypeDefinition @'
+Add-Type -ReferencedAssemblies System.Windows.Forms, System.Drawing -TypeDefinition @'
 using System;
 using System.Reflection;
+using System.Drawing;
 using System.Windows.Forms;
 public static class TimerTestInput {
     public static KeyEventArgs Key(Control control, Keys key) {
@@ -24,9 +25,27 @@ public static class TimerTestInput {
             .Invoke(control, new object[] { args });
         return args;
     }
+    public static bool SendKey(Control control, Keys key) {
+        Message msg = Message.Create(control.Handle, 0x0100, (IntPtr)(int)key, IntPtr.Zero);
+        PreProcessControlState state = control.PreProcessControlMessage(ref msg);
+        if (key != Keys.Right) return state == PreProcessControlState.MessageProcessed;
+        if (state != PreProcessControlState.MessageNeeded) return false;
+
+        // Reproduce the WinForms dispatch step after preprocessing identifies an input key.
+        return (bool)typeof(Control).GetMethod("ProcessKeyMessage", BindingFlags.Instance | BindingFlags.NonPublic)
+            .Invoke(control, new object[] { msg });
+    }
     public static void DialogKey(Form form, Keys key) {
         typeof(Form).GetMethod("ProcessDialogKey", BindingFlags.Instance | BindingFlags.NonPublic)
             .Invoke(form, new object[] { key });
+    }
+    public static void Paint(Control control) {
+        using (Bitmap bitmap = new Bitmap(control.Width, control.Height))
+        using (Graphics graphics = Graphics.FromImage(bitmap))
+        using (PaintEventArgs args = new PaintEventArgs(graphics, control.ClientRectangle)) {
+            typeof(Control).GetMethod("OnPaint", BindingFlags.Instance | BindingFlags.NonPublic)
+                .Invoke(control, new object[] { args });
+        }
     }
     public static void Click(Control control) {
         typeof(Control).GetMethod("OnClick", BindingFlags.Instance | BindingFlags.NonPublic)
@@ -68,6 +87,16 @@ function Invoke-TestDialog($dialog) {
                 $dialog.Controls['MeetingEnd'].Value = $script:PickedEnd
                 Assert ($script:SetEndLabel.Text.Contains('다음 날')) 'Next-day rollover needs a visible label'
                 if ($RenderDirectory) { Save-DialogRender $dialog 'settings' }
+                [TimerTestInput]::DialogKey($dialog, [Windows.Forms.Keys]::Enter)
+            }
+            'Clamp' {
+                $count = $dialog.Controls['SpeakerCount']
+                Assert ($count.Minimum -eq 4 -and $count.Value -eq 6) 'Settings cannot remove the current speaker or earlier speakers'
+                $dialog.Controls['MeetingEnd'].Value = (Get-Date).AddMinutes(2)
+                Assert ($count.Value -eq 4 -and $count.Maximum -eq 4) 'An earlier deadline can reduce the count only to the current speaker'
+                Assert ($script:SetHint.Text.Contains('6명에서 4명으로')) 'The automatic reduction shows both counts before saving'
+                $dialog.Controls['MeetingEnd'].Value = (Get-Date).AddMinutes(1)
+                Assert ($script:SetHint.Text.Contains('6명에서 4명으로')) 'The reduction remains visible while editing the deadline'
                 [TimerTestInput]::DialogKey($dialog, [Windows.Forms.Keys]::Enter)
             }
             'Cancel' {
@@ -198,6 +227,54 @@ try {
     Go-Next
     $key = [TimerTestInput]::Key($form, [Windows.Forms.Keys]'Control, Z')
     Assert ($script:Idx -eq 0 -and $key.SuppressKeyPress) 'Ctrl+Z restores the last action'
+
+    # Initialize the paint handlers before exposing the window to synchronous native messages.
+    foreach ($panel in @($strip, $stage, $band)) { [TimerTestInput]::Paint($panel) }
+    $form.Show()
+    foreach ($usePresenterBar in @($false, $true)) {
+        Fresh
+        Set-BarMode $usePresenterBar
+        $runButton = if ($usePresenterBar) { $btnBarRun } else { $btnRun }
+        $nextButton = if ($usePresenterBar) { $btnBarNext } else { $btnNext }
+        $undoButton = if ($usePresenterBar) { $btnBarUndo } else { $btnUndo }
+        $form.Activate()
+        $runButton.Select()
+        Assert ($form.ActiveControl -eq $runButton) 'The run button can receive focus'
+        Assert ([TimerTestInput]::SendKey($runButton, [Windows.Forms.Keys]::Right)) 'The focused button routes Right through key preprocessing'
+        Assert ($script:Idx -eq 0 -and ($form.ActiveControl -eq $runButton)) 'Right does not advance or move button focus before the start'
+        Toggle-Run
+        Assert ($tips.GetToolTip($nextButton).Contains('다음 발표자')) 'Next indicates that the next speaker starts'
+        Assert ([TimerTestInput]::SendKey($runButton, [Windows.Forms.Keys]::Right)) 'Right is consumed during a run'
+        Assert ($script:Idx -eq 1 -and ($form.ActiveControl -eq $runButton)) 'Right advances while keeping button focus'
+        Toggle-Run
+        Assert ([TimerTestInput]::SendKey($runButton, [Windows.Forms.Keys]::Right)) 'Right remains consumed while paused'
+        Assert ($script:Idx -eq 1 -and ($form.ActiveControl -eq $runButton)) 'Right does not advance or move focus while paused'
+        Toggle-Run
+        Assert ([TimerTestInput]::SendKey($runButton, [Windows.Forms.Keys]::Tab) -and ($form.ActiveControl -eq $nextButton)) 'Tab moves forward between action buttons'
+        [TimerTestInput]::DialogKey($form, [Windows.Forms.Keys]'Shift, Tab')
+        Assert (($form.ActiveControl -eq $runButton)) 'Shift+Tab moves back between action buttons'
+        Set-Count 2
+        Assert ($nextButton.Text -eq '종료' -and $tips.GetToolTip($nextButton).Contains('회의를 종료합니다')) 'The last action tooltip describes finishing the meeting'
+        Assert ([TimerTestInput]::SendKey($runButton, [Windows.Forms.Keys]::Right)) 'Right is consumed at finish'
+        Assert ((Test-FinishHint (Get-Phase)) -and $undoButton.Enabled) 'Finishing brings up a brief completion notice and enables undo'
+        Assert ((Get-BarMessage (Get-Phase)) -eq '회의 종료 · 되돌리기') 'Presenter status announces finish and undo'
+        if ($RenderDirectory) {
+            $layout = if ($usePresenterBar) { 'bar' } else { 'main' }
+            Save-MainRender ($layout + '-finished')
+        }
+        $undoButton.PerformClick()
+        Assert ($script:Idx -eq 1 -and $script:Sw.IsRunning -and -not (Test-FinishHint (Get-Phase))) 'Undo restores the running final speaker and dismisses the completion notice'
+    }
+    Set-BarMode $false
+
+    Fresh
+    Toggle-Run
+    Go-Next
+    Go-Next
+    Go-Next
+    $script:DialogCase = 'Clamp'
+    Show-Settings
+    Assert ($script:People.Count -eq 4 -and $script:Cfg.Count -eq 4 -and $script:Idx -eq 3 -and $script:Sw.IsRunning) 'Save preserves the active speaker and persists the announced count'
 
     Fresh
     $script:End = (Get-Date).AddMinutes(-1)

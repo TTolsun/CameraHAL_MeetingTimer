@@ -276,10 +276,19 @@ Check 'no-op reset keeps the earlier undo' (Get-Elapsed 0) 100
 
 # ---------------- speaker count changes ----------------
 New-Meeting 6
-Toggle-Run; Step 100; Go-Next; Step 100; Go-Next
+Toggle-Run; Step 100; Go-Next; Step 110; Go-Next; Step 120; Go-Next; Step 130
 Set-Count 2
-Check 'shrinking below the current index clamps it' $script:Idx 1
-Check 'shrinking keeps the speaker list valid' $script:People.Count 2
+Check 'shrinking below the current speaker keeps them current' $script:Idx 3
+Check 'shrinking removes only future speakers' $script:People.Count 4
+Check 'shrinking preserves the third speaker record' (Get-Elapsed 2) 120
+Check 'shrinking preserves the running speaker record' (Get-Elapsed 3) 130
+Step 10
+Check 'the current speaker keeps running after shrinking' (Get-Elapsed 3) 140
+Go-Next
+Undo-Last
+Check 'undoing finish restores the shortened meeting' $script:People.Count 4
+Check 'undoing finish returns to the fourth speaker' $script:Idx 3
+Check 'undoing finish keeps the elapsed time' (Get-Elapsed 3) 140
 
 # ---------------- presenter bar ----------------
 Add-Type -AssemblyName System.Drawing
