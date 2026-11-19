@@ -55,6 +55,16 @@ public class MtCanvas : Panel {
     }
 }
 
+// NumericUpDown otherwise ignores an increment at its limit without feedback.
+public class MtSpeakerCount : NumericUpDown {
+    public event System.ComponentModel.CancelEventHandler Increasing;
+    public override void UpButton() {
+        var args = new System.ComponentModel.CancelEventArgs();
+        if (Increasing != null) Increasing(this, args);
+        if (!args.Cancel) base.UpButton();
+    }
+}
+
 // Native keyboard and accessibility behavior with custom painting.
 public class MtButton : Button {
     public Color Fill = Color.White, Fore = Color.Black, Border = Color.Empty, HoverFill = Color.Empty, PressFill = Color.Empty;
@@ -355,16 +365,6 @@ function Lock-Budget {
         }
         $p.Budget = Get-Preview
         $p.Started = $true
-    }
-}
-
-# Recomputes the first plan from the current state (used when settings change).
-function Reset-Plan {
-    $script:Plan = 0.0
-    $cur = $script:People[$script:Idx]
-    if ($cur.Budget -gt 0) {
-        $n = $script:People.Count - $script:Idx
-        $script:Plan = Calc-Share ((Get-MeetingLeft) + (Get-Elapsed $script:Idx)) 0 $n 0
     }
 }
 
@@ -822,9 +822,7 @@ function Refresh-All {
     $nextTip = if ($isLast) { '회의를 종료합니다 (N / →)' } else { '다음 발표자를 바로 시작합니다 (N / →)' }
     if ($tips.GetToolTip($btnNext) -ne $nextTip) {
         $tips.SetToolTip($btnNext, $nextTip)
-        $tips.SetToolTip($btnBarNext, $nextTip)
     }
-    $tips.SetToolTip($btnBarRun, ($btnRun.Text + ' (Space)'))
     $btnBarNext.Enabled = $script:Sw.IsRunning
     $btnBarUndo.Enabled = Test-UndoAllowed
     if ($script:BarMode) { Layout-BarControls }
@@ -904,32 +902,12 @@ function Reset-Current {
     Refresh-All
 }
 
-function Get-MinSpeakerCount {
-    $script:Idx + 1
-}
-
-function Set-Count([int]$n) {
-    $n = [math]::Max((Get-MinSpeakerCount), [math]::Min(50, $n))
-    if ($n -eq $script:People.Count) { return }
-    $script:Undo = $null
-    $wasRunning = $script:Sw.IsRunning
-    Commit-Current
-    $list = New-Object System.Collections.Generic.List[object]
-    foreach ($p in $script:People) { $list.Add($p) }
-    while ($list.Count -lt $n) { $list.Add((New-Person)) }
-    while ($list.Count -gt $n) { $list.RemoveAt($list.Count - 1) }
-    $script:BatonStarted = $null
-    $script:People = $list.ToArray()
-    if ($wasRunning) { Lock-Budget; $script:Sw.Start() }
-    Refresh-All
-}
-
-function Start-Over {
+function Start-Over([datetime]$endTime = (Get-NextHour)) {
     $script:BatonStarted = $null
     $script:Sw.Reset()
     $script:People = @(1..$script:Cfg.Count | ForEach-Object { New-Person })
     $script:Idx = 0
-    $script:End = Get-NextHour
+    $script:End = $endTime
     $script:Plan = 0.0
     Refresh-All
 }
@@ -1000,40 +978,65 @@ function Resolve-EndTime([datetime]$picked, [datetime]$original) {
     $end
 }
 
-# Caps the speaker count so every remaining speaker can get at least MinShare seconds.
-# Speakers who already finished stay counted; only the ones still to come are limited.
-$script:SetInitialEnd = $script:End
-$script:SetHintBase = '남은 회의 시간은 아직 시작하지 않은 발표자에게 자동으로 똑같이 나뉩니다.'
-function Update-SetMax {
-    $end = Resolve-EndTime $script:SetDt.Value $script:SetInitialEnd
-    $leftSec = ($end - (Get-Date)).TotalSeconds
-    $fit = [int][math]::Floor($leftSec / $script:MinShare)
-    $max = [math]::Min(50, [math]::Max((Get-MinSpeakerCount), $script:Idx + $fit))
-    # Opening settings or changing preferences must preserve existing speakers.
-    if ($end -eq $script:SetInitialEnd) { $max = [math]::Max($max, $script:People.Count) }
-    # Assigning Maximum can change Value immediately and raise ValueChanged.
-    $before = $script:SetNum.Value
-    $previousClamp = $script:SetCountBeforeClamp
-    $script:SetNum.Maximum = [decimal]$max
-    $after = $script:SetNum.Value
-    if ($end.Date -gt (Get-Date).Date) { $script:SetEndLabel.Text = '종료 시각 · 다음 날' }
-    else { $script:SetEndLabel.Text = '종료 시각' }
-    $script:SetHintDefault = if ($leftSec -le 0) { '회의 시간이 끝났습니다. 시작 시 초과 시간을 기록합니다.' }
-    elseif ($fit -lt (50 - $script:Idx)) { '남은 시간 기준 최대 {0}명입니다 (1인당 최소 1분).' -f $max }
-    else { $script:SetHintBase }
-    if ($after -lt $before) {
-        $script:SetCountBeforeClamp = if ($null -eq $previousClamp) { $before } else { $previousClamp }
+# Validate a fresh meeting against all speakers, including anyone who spoke in the old one.
+function Get-ScheduleIssue([long]$count, [datetime]$end) {
+    if ($count -gt 50) { return '한 회의에는 최대 50명까지 참여할 수 있습니다. 50명 이하로 설정해 주세요.' }
+    $remaining = ($end - (Get-Date)).TotalSeconds
+    $seconds = [math]::Max(0, [math]::Floor($remaining))
+    $capacity = [int][math]::Floor($seconds / $script:MinShare)
+    if ($count -le $capacity) { return }
+    $need = [int][math]::Ceiling($count * $script:MinShare / 60)
+    $reason = if ($remaining -le 0) { '선택한 종료 시각이 지났습니다.' } else {
+        '남은 시간은 {0}분 {1}초입니다.' -f [math]::Floor($seconds / 60), ($seconds % 60)
     }
-    $script:SetHint.Text = if ($null -ne $script:SetCountBeforeClamp) {
-        '남은 시간에 맞춰 발표자 수를 {0}명에서 {1}명으로 줄였습니다.' -f $script:SetCountBeforeClamp, $after
-    } else { $script:SetHintDefault }
+    $next = if ($capacity -ge 1) { "발표자를 ${capacity}명 이하로 줄이거나`n종료 시각을 늦춰 주세요." }
+            else { '종료 시각을 조금 더 늦춰 주세요.' }
+    "$reason`n${count}명에게 1분씩, 최소 ${need}분이 필요합니다.`n`n$next"
+}
+
+function Show-ScheduleNotice([string]$reason) {
+    $palette = $Themes.light
+    $notice = New-Object Windows.Forms.Form
+    try {
+        $notice.Name = 'ScheduleNotice'
+        $notice.Text = '회의 설정'
+        $notice.StartPosition = 'CenterParent'
+        $notice.FormBorderStyle = 'FixedDialog'
+        $notice.MaximizeBox = $false
+        $notice.MinimizeBox = $false
+        $notice.ShowInTaskbar = $false
+        $notice.BackColor = $palette.Paper
+        $heading = New-DlgLabel '회의 설정을 조정해 주세요' (FKM 20) $palette.Ink 24 20 296 32
+        $body = New-DlgLabel $reason (FK 14) $palette.Sub 24 64 296 1
+        $body.Name = 'Reason'
+        $body.MaximumSize = New-Object Drawing.Size((S 296), 0)
+        $body.AutoSize = $true
+        $back = New-Button '설정으로 돌아가기' 'primary' 144 44 {} $palette
+        $back.DialogResult = 'OK'
+        $notice.AcceptButton = $back
+        $notice.CancelButton = $back
+        $notice.Controls.AddRange(@($heading, $body, $back))
+        $back.Location = New-Object Drawing.Point((S 176), ($body.Bottom + (S 24)))
+        $notice.ClientSize = New-Object Drawing.Size((S 344), ($back.Bottom + (S 24)))
+        [void]$notice.ShowDialog($script:SetDlg)
+    } finally { $notice.Dispose() }
+}
+
+function Update-SettingsHint {
+    $end = $script:SetProposedEnd
+    $count = [int]$script:SetNum.Value
+    $script:SetEndLabel.Text = if ($end.Date -gt (Get-Date).Date) { '종료 시각 · 다음 날' } else { '종료 시각' }
+    $capacity = [math]::Min(50, [math]::Max(0, [math]::Floor(($end - (Get-Date)).TotalSeconds / $script:MinShare)))
+    $script:SetHint.Text = if ($capacity -eq 0) { '새 회의를 시작하려면 최소 1분이 필요합니다.' }
+        elseif ($count -gt $capacity) { '현재 종료 시각에는 최대 {0}명까지 배정할 수 있습니다. 인원이나 종료 시각을 조정해 주세요.' -f $capacity }
+        else { '1인당 1분 기준으로 최대 {0}명입니다.' -f $capacity }
 }
 
 function Show-Settings {
     $dlg = New-Object Windows.Forms.Form
     $dlg.Name = 'Settings'
-    $dlg.Text = 'CameraHAL_MeetingTimer'
-    $dlg.ClientSize = New-Object Drawing.Size((S 340), (S 382))
+    $dlg.Text = '회의 설정'
+    $dlg.ClientSize = New-Object Drawing.Size((S 340), (S 420))
     $dlg.StartPosition = 'CenterParent'
     $dlg.FormBorderStyle = 'FixedDialog'
     $dlg.MaximizeBox = $false
@@ -1047,11 +1050,13 @@ function Show-Settings {
     $title = New-DlgLabel '설정' (FKM 22) $L.Ink 24 20 292 34
 
     $l1 = New-DlgLabel '발표자 수' (FKM 14) $L.Ink 24 72 140 22
-    $num = New-Object Windows.Forms.NumericUpDown
+    $num = New-Object MtSpeakerCount
     $num.Name = 'SpeakerCount'
     $num.TabIndex = 0
-    $num.Minimum = Get-MinSpeakerCount
-    $num.Maximum = 50
+    $num.Minimum = 1
+    # Keep over-limit typed drafts visible until Save can explain the limit.
+    $num.Maximum = [int]::MaxValue
+    $num.AccessibleDescription = '발표자 수는 1명부터 50명까지 설정할 수 있습니다.'
     $num.Value = [decimal]$script:People.Count
     $num.Font = FK 15
     $num.BorderStyle = 'FixedSingle'
@@ -1065,24 +1070,30 @@ function Show-Settings {
     $dt.CustomFormat = 'HH:mm'
     $dt.ShowUpDown = $true
     $dt.Font = FK 15
-    $script:SetInitialEnd = $script:End
-    $dt.Value = $script:SetInitialEnd
+    $script:SetProposedEnd = $script:End
+    $dt.Value = $script:SetProposedEnd
     $script:SetEndLabel = $l2
     $dt.SetBounds((S 172), (S 98), (S 120), (S 32))
 
-    $h1 = New-DlgLabel $script:SetHintBase (FK 12) $L.Sub 24 136 292 48
+    $h1 = New-DlgLabel '' (FK 12) $L.Sub 24 132 292 44
+    $resetHint = New-DlgLabel "인원이나 종료 시각을 바꿔 저장하면`n기록이 지워지고 1번 발표자가 대기합니다." (FK 13) $L.Ink 24 176 292 48
     $script:SetNum = $num
     $script:SetDt = $dt
     $script:SetHint = $h1
-    $script:SetCountBeforeClamp = $null
-    $num.add_ValueChanged({
-        if ($null -ne $script:SetCountBeforeClamp) {
-            $script:SetCountBeforeClamp = $null
-            $script:SetHint.Text = $script:SetHintDefault
+    $num.add_Increasing({
+        param($sender, $eventArgs)
+        $issue = Get-ScheduleIssue ([long]$sender.Value + 1) $script:SetProposedEnd
+        if ($issue) {
+            $eventArgs.Cancel = $true
+            Show-ScheduleNotice $issue
         }
     })
-    $dt.add_ValueChanged({ Update-SetMax })
-    Update-SetMax
+    $num.add_ValueChanged({ Update-SettingsHint })
+    $dt.add_ValueChanged({
+        $script:SetProposedEnd = Resolve-EndTime $script:SetDt.Value $script:End
+        Update-SettingsHint
+    })
+    Update-SettingsHint
 
     $cbTop = New-Object Windows.Forms.CheckBox
     $cbTop.TabIndex = 2
@@ -1090,45 +1101,55 @@ function Show-Settings {
     $cbTop.Font = FK 14
     $cbTop.ForeColor = $L.Ink
     $cbTop.Checked = $script:TopMostPref
-    $cbTop.SetBounds((S 24), (S 192), (S 292), (S 26))
+    $cbTop.SetBounds((S 24), (S 232), (S 292), (S 26))
 
     $script:SetDlg = $dlg
     $script:SetStartOver = $false
     $restart = New-Button '새 회의 시작' 'quiet' 120 36 {
+        $defaultEnd = Get-NextHour
+        $issue = Get-ScheduleIssue ([int]$script:SetNum.Value) $defaultEnd
+        if ($issue) {
+            Show-ScheduleNotice ("기본 종료 시각은 {0:HH:mm}입니다.`n`n{1}`n직접 정한 종료 시각을 쓰려면 설정에서 저장을 눌러 주세요." -f $defaultEnd, $issue)
+            return
+        }
         $r = [Windows.Forms.MessageBox]::Show($script:SetDlg, "기록을 모두 지우고 종료 시각을 다음 정각으로 되돌립니다.`n진행할까요?", '새 회의', 'YesNo', 'Warning')
-        if ($r -eq 'Yes') { $script:SetStartOver = $true; $script:SetDlg.DialogResult = 'OK'; $script:SetDlg.Close() }
+        if ($r -eq 'Yes') { $script:SetProposedEnd = $defaultEnd; $script:SetStartOver = $true; $script:SetDlg.DialogResult = 'OK'; $script:SetDlg.Close() }
     } $L
     $restart.TabIndex = 3
-    $restart.Location = New-Object Drawing.Point((S 24), (S 240))
-    $h2 = New-DlgLabel "기록을 지우고, 종료 시각을`n다음 정각으로 되돌립니다." (FK 12) $L.Sub 156 238 170 40
+    $restart.Location = New-Object Drawing.Point((S 24), (S 282))
+    $h2 = New-DlgLabel "기록을 지우고, 종료 시각을`n다음 정각으로 되돌립니다." (FK 12) $L.Sub 156 280 170 40
 
-    $save = New-Button '저장' 'primary' 92 40 { $script:SetDlg.DialogResult = 'OK'; $script:SetDlg.Close() } $L
+    $save = New-Button '저장' 'primary' 92 44 {
+        $count = [int]$script:SetNum.Value
+        if ($count -ne $script:People.Count -or $script:SetProposedEnd -ne $script:End) {
+            $issue = Get-ScheduleIssue $count $script:SetProposedEnd
+            if ($issue) {
+                Show-ScheduleNotice $issue
+                if ($script:SetProposedEnd -ne $script:End) { $script:SetDt.Select() } else { $script:SetNum.Select() }
+                return
+            }
+        }
+        $script:SetDlg.DialogResult = 'OK'
+        $script:SetDlg.Close()
+    } $L
     $save.TabIndex = 5
     $dlg.AcceptButton = $save
-    $save.Location = New-Object Drawing.Point((S 224), (S 318))
-    $cancel = New-Button '취소' 'outline' 84 40 { $script:SetDlg.DialogResult = 'Cancel'; $script:SetDlg.Close() } $L
+    $save.Location = New-Object Drawing.Point((S 224), (S 352))
+    $cancel = New-Button '취소' 'outline' 84 44 { $script:SetDlg.DialogResult = 'Cancel'; $script:SetDlg.Close() } $L
     $cancel.TabIndex = 4
     $dlg.CancelButton = $cancel
-    $cancel.Location = New-Object Drawing.Point((S 132), (S 318))
+    $cancel.Location = New-Object Drawing.Point((S 132), (S 352))
 
-    $dlg.Controls.AddRange(@($title, $l1, $num, $l2, $dt, $h1, $cbTop, $restart, $h2, $cancel, $save))
+    $dlg.Controls.AddRange(@($title, $l1, $num, $l2, $dt, $h1, $resetHint, $cbTop, $restart, $h2, $cancel, $save))
 
     if ($dlg.ShowDialog($form) -eq 'OK') {
         $script:TopMostPref = $cbTop.Checked
         $form.TopMost = $script:TopMostPref -or $script:BarMode
-        $script:Cfg.Count = [int]$num.Value
-        # Unrelated preference changes preserve the recovery snapshot.
-        if ($script:SetStartOver) {
+        $count = [int]$num.Value
+        if ($script:SetStartOver -or $count -ne $script:People.Count -or $script:SetProposedEnd -ne $script:End) {
+            $script:Cfg.Count = $count
             $script:Undo = $null
-            Start-Over
-        } else {
-            # Picked time is today's; if it is already past, it means tomorrow.
-            $end = Resolve-EndTime $dt.Value $script:SetInitialEnd
-            $changed = $end -ne $script:End -or $script:Cfg.Count -ne $script:People.Count
-            if ($end -ne $script:End) { $script:End = $end }
-            Set-Count $script:Cfg.Count
-            # A different end time or speaker count makes the old first plan meaningless.
-            if ($changed) { $script:Undo = $null; Reset-Plan }
+            Start-Over $script:SetProposedEnd
         }
         try { Save-Config } catch { }
         Refresh-All
@@ -1171,8 +1192,6 @@ foreach ($button in ($normalButtons + $barButtons)) { $button.RightIsInputKey = 
 $stage.Controls.AddRange($barButtons)
 $tab = 0
 foreach ($button in $barButtons) { $button.Visible = $false; $button.TabIndex = $tab; $tab++ }
-$tips.SetToolTip($btnBarBack, '기본 창으로 돌아갑니다 (B / Esc)')
-$tips.SetToolTip($btnBarUndo, '직전 전환, 종료, 초기화 취소 (Ctrl+Z)')
 
 # Switches the main window between the light and dark tables (the settings dialog stays light).
 function Set-Theme([string]$name) {

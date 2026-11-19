@@ -8,6 +8,7 @@ $bootstrap = $source.Substring(0, $source.IndexOf('# ---------------- start ----
 $bootstrap = $bootstrap.Replace('$dlg.ShowDialog($form)', '(Invoke-TestDialog $dlg)')
 # Feed screen coordinates to the real handlers without moving the desktop cursor.
 $bootstrap = $bootstrap.Replace('[Windows.Forms.Cursor]::Position', '$script:TestCursorPosition')
+$bootstrap = $bootstrap.Replace('$notice.ShowDialog($script:SetDlg)', '(Invoke-TestNotice $notice)')
 $testDirectory = Join-Path $repo ('.ui-test-' + [guid]::NewGuid().ToString('N'))
 [void][IO.Directory]::CreateDirectory($testDirectory)
 $bootstrapPath = Join-Path $testDirectory 'Application.ps1'
@@ -63,11 +64,21 @@ function Assert($condition, [string]$message) {
     if (-not $condition) { throw $message }
     $script:Checks++
 }
-function Fresh {
-    $script:Cfg.Count = 6
+function Fresh([int]$count = 6) {
+    $script:Cfg.Count = $count
     $script:Undo = $null
     Start-Over
     $script:End = (Get-Date).AddMinutes(40)
+}
+function Invoke-TestNotice($notice) {
+    $notice.Show()
+    try {
+        $body = $notice.Controls['Reason']
+        $script:NoticeReason = $body.Text
+        Assert ($body.Bottom -lt $notice.AcceptButton.Top) 'The explanation fits above the action'
+        if ($RenderDirectory -and $body.Text -match '6명.*최소 6분') { Save-DialogRender $notice 'schedule-notice' }
+        [TimerTestInput]::DialogKey($notice, [Windows.Forms.Keys]::Escape)
+    } finally { $notice.Close() }
 }
 function Invoke-TestDialog($dialog) {
     $dialog.Show()
@@ -89,15 +100,36 @@ function Invoke-TestDialog($dialog) {
                 if ($RenderDirectory) { Save-DialogRender $dialog 'settings' }
                 [TimerTestInput]::DialogKey($dialog, [Windows.Forms.Keys]::Enter)
             }
-            'Clamp' {
+            'Limits' {
                 $count = $dialog.Controls['SpeakerCount']
-                Assert ($count.Minimum -eq 4 -and $count.Value -eq 6) 'Settings cannot remove the current speaker or earlier speakers'
-                $dialog.Controls['MeetingEnd'].Value = (Get-Date).AddMinutes(2)
-                Assert ($count.Value -eq 4 -and $count.Maximum -eq 4) 'An earlier deadline can reduce the count only to the current speaker'
-                Assert ($script:SetHint.Text.Contains('6명에서 4명으로')) 'The automatic reduction shows both counts before saving'
-                $dialog.Controls['MeetingEnd'].Value = (Get-Date).AddMinutes(1)
-                Assert ($script:SetHint.Text.Contains('6명에서 4명으로')) 'The reduction remains visible while editing the deadline'
+                $picker = $dialog.Controls['MeetingEnd']
+                $picker.Value = (Get-Date).AddMinutes(3)
+                Assert ($count.Value -eq 6 -and $count.Minimum -eq 1) 'Shortening the deadline keeps entered count editable'
+                $script:NoticeReason = ''
                 [TimerTestInput]::DialogKey($dialog, [Windows.Forms.Keys]::Enter)
+                Assert ($script:NoticeReason -match '6명.*최소 6분' -and $dialog.DialogResult -eq 'None') 'Saving an impossible end explains the requirement and leaves settings open'
+                Assert ($script:Idx -eq 3 -and $script:Sw.IsRunning -and $script:People.Count -eq 6) 'Invalid save preserves the live meeting'
+                $count.Value = 2
+                $script:NoticeReason = ''
+                $count.UpButton()
+                Assert ($count.Value -eq 2 -and $script:NoticeReason -match '3명.*최소 3분') 'A blocked spinner increment gives the reason without changing the count'
+                $count.Value = 8
+                $script:NoticeReason = ''
+                $dialog.AcceptButton.PerformClick()
+                Assert ($count.Value -eq 8 -and $dialog.DialogResult -eq 'None' -and $script:NoticeReason -match '8명.*최소 8분') 'An over-budget typed count is explained at save without clamping'
+                $count.Text = '51'
+                $script:NoticeReason = ''
+                $dialog.AcceptButton.PerformClick()
+                Assert ($count.Value -eq 51 -and $script:NoticeReason -match '최대 50명' -and $dialog.DialogResult -eq 'None') 'Typed counts over fifty receive a specific notice'
+                $count.Value = 1
+                $count.UpButton()
+                Assert ($count.Value -eq 2) 'A permitted spinner increment succeeds'
+                $script:SavedEnd = $script:SetProposedEnd
+                $dialog.AcceptButton.PerformClick()
+            }
+            'CountOnly' {
+                $dialog.Controls['SpeakerCount'].Value = 2
+                $dialog.AcceptButton.PerformClick()
             }
             'Cancel' {
                 $dialog.Controls['MeetingEnd'].Value = (Get-Date).AddHours(2)
@@ -232,7 +264,7 @@ try {
     foreach ($panel in @($strip, $stage, $band)) { [TimerTestInput]::Paint($panel) }
     $form.Show()
     foreach ($usePresenterBar in @($false, $true)) {
-        Fresh
+        Fresh 2
         Set-BarMode $usePresenterBar
         $runButton = if ($usePresenterBar) { $btnBarRun } else { $btnRun }
         $nextButton = if ($usePresenterBar) { $btnBarNext } else { $btnNext }
@@ -243,7 +275,8 @@ try {
         Assert ([TimerTestInput]::SendKey($runButton, [Windows.Forms.Keys]::Right)) 'The focused button routes Right through key preprocessing'
         Assert ($script:Idx -eq 0 -and ($form.ActiveControl -eq $runButton)) 'Right does not advance or move button focus before the start'
         Toggle-Run
-        Assert ($tips.GetToolTip($nextButton).Contains('다음 발표자')) 'Next indicates that the next speaker starts'
+        Assert ($tips.GetToolTip($btnNext).Contains('다음 발표자')) 'Main Next describes advancing'
+        foreach ($button in $barButtons) { Assert (!$tips.GetToolTip($button)) 'Presenter actions have no hover popups' }
         Assert ([TimerTestInput]::SendKey($runButton, [Windows.Forms.Keys]::Right)) 'Right is consumed during a run'
         Assert ($script:Idx -eq 1 -and ($form.ActiveControl -eq $runButton)) 'Right advances while keeping button focus'
         if (-not $usePresenterBar) {
@@ -257,8 +290,7 @@ try {
         Assert ([TimerTestInput]::SendKey($runButton, [Windows.Forms.Keys]::Tab) -and ($form.ActiveControl -eq $nextButton)) 'Tab moves forward between action buttons'
         [TimerTestInput]::DialogKey($form, [Windows.Forms.Keys]'Shift, Tab')
         Assert (($form.ActiveControl -eq $runButton)) 'Shift+Tab moves back between action buttons'
-        Set-Count 2
-        Assert ($nextButton.Text -eq '종료' -and $tips.GetToolTip($nextButton).Contains('회의를 종료합니다')) 'The last action tooltip describes finishing the meeting'
+        Assert ($nextButton.Text -eq '종료' -and $tips.GetToolTip($btnNext).Contains('회의를 종료합니다')) 'The last action tooltip describes finishing the meeting'
         Assert ([TimerTestInput]::SendKey($runButton, [Windows.Forms.Keys]::Right)) 'Right is consumed at finish'
         Assert ((Test-FinishHint (Get-Phase)) -and $undoButton.Enabled) 'Finishing brings up a brief completion notice and enables undo'
         Assert ((Get-BarMessage (Get-Phase)) -eq '회의 종료 · 되돌리기') 'Presenter status announces finish and undo'
@@ -276,25 +308,36 @@ try {
     Go-Next
     Go-Next
     Go-Next
-    $script:DialogCase = 'Clamp'
+    $script:DialogCase = 'Limits'
     Show-Settings
-    Assert ($script:People.Count -eq 4 -and $script:Cfg.Count -eq 4 -and $script:Idx -eq 3 -and $script:Sw.IsRunning) 'Save preserves the active speaker and persists the announced count'
+    Assert ($script:People.Count -eq 2 -and $script:End -eq $script:SavedEnd -and $script:Idx -eq 0 -and !$script:Sw.IsRunning -and !$script:Undo -and $script:Plan -eq 0) 'Corrected settings restart with the selected schedule'
+    Assert (@($script:People | Where-Object { $_.Started -or $_.Used -or $_.Budget }).Count -eq 0) 'All speaker records were reset'
+    Fresh
+    Toggle-Run; Go-Next
+    $expectedEnd = $script:End
+    $script:DialogCase = 'CountOnly'
+    Show-Settings
+    Assert ($script:People.Count -eq 2 -and $script:End -eq $expectedEnd -and $script:Idx -eq 0 -and !$script:Sw.IsRunning) 'Count-only change resets and preserves the chosen end'
 
     Fresh
+    Toggle-Run; Go-Next
     $script:End = (Get-Date).AddMinutes(-1)
     $expectedEnd = $script:End
     $script:DialogCase = 'Unrelated'
     Show-Settings
-    Assert ($script:End -eq $expectedEnd -and $script:People.Count -eq 6) 'Preference-only save preserves expired end and speaker count'
+    Assert ($script:End -eq $expectedEnd -and $script:People.Count -eq 6 -and $script:Sw.IsRunning -and $script:Idx -eq 1 -and $script:Undo) 'Preference-only save preserves the live meeting even past the end'
     Fresh
+    Toggle-Run; Go-Next
     $script:DialogCase = 'NextDay'
-    $script:PickedEnd = (Get-Date).Date
+    $now = Get-Date
+    $script:PickedEnd = if ($now.Hour -gt 0) { $now.AddHours(-1) } else { $now.Date }
     Show-Settings
-    Assert ($script:End.Date -eq (Get-Date).Date.AddDays(1)) 'Edited past time resolves to tomorrow'
+    Assert ($script:End.Date -eq (Get-Date).Date.AddDays(1) -and !$script:Sw.IsRunning -and $script:Idx -eq 0 -and $script:People.Count -eq 6) 'Time-only save restarts with the next-day deadline'
+    Toggle-Run; Go-Next
     $expectedEnd = $script:End
     $script:DialogCase = 'Cancel'
     Show-Settings
-    Assert ($script:End -eq $expectedEnd) 'Cancelled settings preserve the deadline'
+    Assert ($script:End -eq $expectedEnd -and $script:Idx -eq 1 -and $script:Sw.IsRunning -and $script:Undo) 'Cancel preserves the live meeting'
 
     foreach ($theme in @('light','dark')) {
         Set-Theme $theme
@@ -349,7 +392,7 @@ try {
         Assert ($form.Width -eq $compactWidth) 'Quiet time guidance preserves the presenter bar width'
         if ($RenderDirectory) { Save-MainRender ($theme + '-bar-notice') }
         $script:Sw.Stop()
-        Set-Count 50
+        Fresh 50
         $script:Idx = 11
         Refresh-All
         Assert ($form.Width -eq $compactWidth) 'Fifty speakers do not change the presenter bar width'
@@ -363,12 +406,13 @@ try {
         $highlighted = Get-Phase
         Assert ((Get-ClockColor $highlighted) -eq $C.Overtime -and (Get-ClockColor $highlighted $true) -eq $C.BarOvertime) 'Overtime digits use the quiet highlight from fifteen seconds'
         if ($RenderDirectory) { Save-MainRender ($theme + '-bar-crowded-over') }
-        Set-Count 20
+        $crowdedPeople = $script:People
+        $script:People = $crowdedPeople[0..19]
         $script:Sw.Restart()
         Assert ((Get-BarMessage (Get-Phase)) -eq '') 'Running overtime uses the clock alone in presenter mode'
         if ($RenderDirectory) { Save-MainRender ($theme + '-bar-speaker-12-of-20') }
         $script:Sw.Stop()
-        Set-Count 50
+        $script:People = $crowdedPeople
         $script:People[11].Used = 115.5
         Assert ((Get-ClockColor (Get-Phase)) -eq (Get-ClockColor $highlighted)) 'Overtime highlight is stable'
         $script:BarEdge = 'right'
