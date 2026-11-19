@@ -274,21 +274,23 @@ Reset-Current
 Undo-Last
 Check 'no-op reset keeps the earlier undo' (Get-Elapsed 0) 100
 
-# ---------------- speaker count changes ----------------
+# ---------------- fresh meeting settings ----------------
 New-Meeting 6
-Toggle-Run; Step 100; Go-Next; Step 110; Go-Next; Step 120; Go-Next; Step 130
-Set-Count 2
-Check 'shrinking below the current speaker keeps them current' $script:Idx 3
-Check 'shrinking removes only future speakers' $script:People.Count 4
-Check 'shrinking preserves the third speaker record' (Get-Elapsed 2) 120
-Check 'shrinking preserves the running speaker record' (Get-Elapsed 3) 130
-Step 10
-Check 'the current speaker keeps running after shrinking' (Get-Elapsed 3) 140
-Go-Next
-Undo-Last
-Check 'undoing finish restores the shortened meeting' $script:People.Count 4
-Check 'undoing finish returns to the fourth speaker' $script:Idx 3
-Check 'undoing finish keeps the elapsed time' (Get-Elapsed 3) 140
+Toggle-Run; Step 30; Go-Next
+$selectedEnd = (Get-Date).AddMinutes(10)
+$script:Cfg.Count = 2
+Start-Over $selectedEnd
+Check 'restart uses selected count' $script:People.Count 2
+Check 'restart keeps selected end' $script:End $selectedEnd
+Check 'restart begins at first speaker' $script:Idx 0
+Check 'restart clock waits for start' $script:Sw.IsRunning $false
+Check 'restart clears previous time' (Get-Elapsed 0) 0
+Check 'fresh meeting uses all remaining time' (Get-Preview) 300
+Check 'exact minute per speaker fits' (Get-ScheduleIssue 2 (Get-Date).AddSeconds(120)) $null
+Check 'one second short requires adjustment' ([bool](Get-ScheduleIssue 2 (Get-Date).AddSeconds(119))) $true
+Check 'expired deadline gives a reason' ((Get-ScheduleIssue 1 (Get-Date)) -match '지났습니다') $true
+Check 'fewer than sixty seconds cannot support one speaker' ([bool](Get-ScheduleIssue 1 (Get-Date).AddSeconds(59))) $true
+Check 'app speaker limit has its own explanation' ((Get-ScheduleIssue 51 (Get-Date).AddHours(3)) -match '최대 50명') $true
 
 # ---------------- presenter bar ----------------
 Add-Type -AssemblyName System.Drawing
