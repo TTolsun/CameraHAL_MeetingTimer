@@ -246,6 +246,10 @@ try {
         Assert ($tips.GetToolTip($nextButton).Contains('다음 발표자')) 'Next indicates that the next speaker starts'
         Assert ([TimerTestInput]::SendKey($runButton, [Windows.Forms.Keys]::Right)) 'Right is consumed during a run'
         Assert ($script:Idx -eq 1 -and ($form.ActiveControl -eq $runButton)) 'Right advances while keeping button focus'
+        if (-not $usePresenterBar) {
+            Assert ($form.Text -match '^\+?\d{2,}:[0-5]\d · 발표자 2 · CameraHAL_MeetingTimer$') 'Normal title and taskbar label identify only the current speaker'
+            if ($RenderDirectory) { Save-MainRender 'main-speaker-2' }
+        }
         Toggle-Run
         Assert ([TimerTestInput]::SendKey($runButton, [Windows.Forms.Keys]::Right)) 'Right remains consumed while paused'
         Assert ($script:Idx -eq 1 -and ($form.ActiveControl -eq $runButton)) 'Right does not advance or move focus while paused'
@@ -382,6 +386,15 @@ try {
     Assert ($btnUndo.Right -lt $btnSet.Left) 'Main actions fit minimum width'
     Assert ($btnLight.Right -lt $btnDark.Left -and $btnDark.Right -lt $btnBar.Left -and $btnBar.Right -le $band.ClientSize.Width) 'Theme and presenter icons fit in order at minimum width'
     Assert ($btnLight.Top -eq $btnBar.Top -and $btnDark.Top -eq $btnBar.Top) 'Presenter icon shares the theme row'
+    # Physical pixels available to the normal clock in a 380 x 328 client at 200% DPI.
+    $clockWidth = 760
+    $clockHeight = 240
+    $normalFont = Font-Px $famNum ($clockHeight * 0.82) $numStyle
+    Assert ((Get-StageClockFont '04:32' $clockWidth $clockHeight) -eq $normalFont) 'A typical countdown retains the normal font size'
+    foreach ($text in @('1439:59', '+1000:01')) {
+        $font = Get-StageClockFont $text $clockWidth $clockHeight
+        Assert ((Measure-W $text $font) -le $clockWidth) "The full $text clock fits the normal window at 200% DPI"
+    }
     if ($RenderDirectory) { Save-MainRender 'minimum' }
     Write-Host ("{0} native UI checks passed" -f $script:Checks)
 } finally {

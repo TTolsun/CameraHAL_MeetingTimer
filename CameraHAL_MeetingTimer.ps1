@@ -479,7 +479,7 @@ function Get-StripNeed([bool]$labels, [string]$tail) {
 function Get-MinClientWidth {
     $topBar = Get-StripNeed $false '초과 예상'
     $band = (S 16) + (S $script:RunW) + (S 6) + (S $script:NextW) + (S 6) + (S 68) + (S 10) + (S 52) + (S 16)
-    $head = (S 20) * 2 + (Measure-W '발표자 50' (FKM 16)) + (Measure-W ' / 50명' (FK 13)) + (Measure-W '초과 · 일시정지' (FKM 12)) + (S 18)
+    $head = (S 20) * 2 + (Measure-W '발표자 50' (FKM 16)) + (Measure-W '초과 · 일시정지' (FKM 12)) + (S 18)
     $msgs = @('59분 59초 남았어요', $script:MsgPause, ($script:MsgIdle -f '00:00'), $script:MsgUndo, $script:MsgFinish)
     $coach = (S 20) * 2 + (($msgs | ForEach-Object { Measure-W $_ (FKM 13) } | Measure-Object -Maximum).Maximum)
     [math]::Max([math]::Max($topBar, $band), [math]::Max($head, $coach))
@@ -731,6 +731,23 @@ function Paint-Bar($g) {
     }
 }
 
+function Get-StageClockFont([string]$text, [int]$width, [int]$height) {
+    $px = [math]::Max((S 20), [math]::Min($height * 0.82, $width / 3.5))
+    $font = Font-Px $famNum $px $numStyle
+    $measured = Measure-W $text $font
+    if ($measured -gt $width) {
+        # Jump near the fitting size to avoid caching every intermediate font.
+        $px = [math]::Floor($font.Size * $width / $measured)
+        $font = Font-Px $famNum $px $numStyle
+        # GDI can round the measured width differently at the new size.
+        while ($px -gt 6 -and (Measure-W $text $font) -gt $width) {
+            $px -= 1
+            $font = Font-Px $famNum $px $numStyle
+        }
+    }
+    $font
+}
+
 function Paint-Stage($g) {
     if ($script:BarMode) { Paint-Bar $g; return }
     $W = $stage.ClientSize.Width; $H = $stage.ClientSize.Height
@@ -743,7 +760,6 @@ function Paint-Stage($g) {
     $head = '발표자 {0}' -f ($script:Idx + 1)
     $hw = Measure-W $head (FKM 16)
     Draw-Text $g $head (FKM 16) $C.Ink $pad (S 14) ($hw + 2) (S 26)
-    Draw-Text $g (' / {0}명' -f $script:People.Count) (FK 13) $C.Sub ($pad + $hw) (S 14) (S 80) (S 26)
     if ($st.Level -eq 'over') {
         $bt = if ($st.Run -eq 'pause') { '초과 · 일시정지' } else { '시간 초과' }
         $bc = $C.Sub; $bb = $C.IdleLine
@@ -754,10 +770,10 @@ function Paint-Stage($g) {
     [void](Draw-PillRight $g $bt (FKM 12) $NoColor $bc $bb ($W - $pad) (S 15) (S 24))
 
     $top = S 40
-    $bottom = $H - (S 66)
+    $bottom = $H - (S 38)
     $dh = [math]::Max((S 30), $bottom - $top)
-    $px = [math]::Max((S 20), [math]::Min($dh * 0.82, $W / 3.5))
-    Draw-Text $g $st.Text (Font-Px $famNum $px $numStyle) (Get-ClockColor $st) 0 $top $W $dh 'Center'
+    $clockFont = Get-StageClockFont $st.Text $W $dh
+    Draw-Text $g $st.Text $clockFont (Get-ClockColor $st) 0 $top $W $dh 'Center'
 
     $mc = $C.Sub
     if (Test-FinishHint $st) { $msg = $script:MsgFinish; $mc = $C.Accent }
@@ -768,7 +784,6 @@ function Paint-Stage($g) {
     elseif ($st.Run -eq 'idle') { $msg = $script:MsgIdle -f (Fmt $st.Budget) }
     else { $msg = '배정 {0}' -f (Fmt $st.Budget) }
     Draw-Text $g $msg (FKM 13) $mc $pad $bottom $cw (S 22) 'Center'
-    Paint-SpeakerBaton $g $pad ($H - (S 41)) $cw
 
     $n = $script:People.Count
     $gap = if ($n -gt 12) { S 2 } else { S 4 }
@@ -814,7 +829,9 @@ function Refresh-All {
     $btnBarUndo.Enabled = Test-UndoAllowed
     if ($script:BarMode) { Layout-BarControls }
     # The title doubles as the taskbar label while minimized.
-    $form.Text = '{0} · 발표자 {1}/{2} · CameraHAL_MeetingTimer' -f $st.Text, ($script:Idx + 1), $script:People.Count
+    $speaker = $script:Idx + 1
+    if ($script:BarMode) { $speaker = '{0}/{1}' -f $speaker, $script:People.Count }
+    $form.Text = '{0} · 발표자 {1} · CameraHAL_MeetingTimer' -f $st.Text, $speaker
     $strip.Invalidate()
     $stage.Invalidate()
 }
