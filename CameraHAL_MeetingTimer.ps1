@@ -60,6 +60,12 @@ public class MtButton : Button {
     public Color Fill = Color.White, Fore = Color.Black, Border = Color.Empty, HoverFill = Color.Empty, PressFill = Color.Empty;
     public string Glyph = "";
     public int Radius = 4;
+    public bool RightIsInputKey;
+
+    // Let the timer form's KeyPreview receive Right before focus navigation.
+    protected override bool IsInputKey(Keys keyData) {
+        return (RightIsInputKey && keyData == Keys.Right) || base.IsInputKey(keyData);
+    }
     private bool hover, press;
 
     public MtButton() {
@@ -452,6 +458,8 @@ function New-Button([string]$text, [string]$kind, [int]$w, [int]$h, [scriptblock
 $script:MsgIdle = '배정 {0} · 시작을 눌러 주세요'
 $script:MsgPause = '일시정지'
 $script:MsgUndo = 'Ctrl+Z로 되돌리기'
+$script:MsgFinish = '회의를 종료했습니다. Ctrl+Z로 되돌리기'
+$script:MsgBarFinish = '회의 종료 · 되돌리기'
 # Bottom row sizes (logical px): Start/Next buttons, then the theme and settings icons at the right edge.
 $script:RunW = 88
 $script:NextW = 64
@@ -472,7 +480,7 @@ function Get-MinClientWidth {
     $topBar = Get-StripNeed $false '초과 예상'
     $band = (S 16) + (S $script:RunW) + (S 6) + (S $script:NextW) + (S 6) + (S 68) + (S 10) + (S 52) + (S 16)
     $head = (S 20) * 2 + (Measure-W '발표자 50' (FKM 16)) + (Measure-W ' / 50명' (FK 13)) + (Measure-W '초과 · 일시정지' (FKM 12)) + (S 18)
-    $msgs = @('59분 59초 남았어요', $script:MsgPause, ($script:MsgIdle -f '00:00'), $script:MsgUndo)
+    $msgs = @('59분 59초 남았어요', $script:MsgPause, ($script:MsgIdle -f '00:00'), $script:MsgUndo, $script:MsgFinish)
     $coach = (S 20) * 2 + (($msgs | ForEach-Object { Measure-W $_ (FKM 13) } | Measure-Object -Maximum).Maximum)
     [math]::Max([math]::Max($topBar, $band), [math]::Max($head, $coach))
 }
@@ -635,7 +643,12 @@ function Get-RemainingMessage([double]$seconds) {
     '{0}분 {1}초 남았어요' -f $minutes, $secs
 }
 
+function Test-FinishHint($state) {
+    $state.Run -eq 'idle' -and $script:Undo.Kind -eq 'finish' -and (Test-UndoHint)
+}
+
 function Get-BarMessage($state) {
+    if (Test-FinishHint $state) { return $script:MsgBarFinish }
     if ($state.Run -eq 'pause') { return $script:MsgPause }
     if ($state.Level -eq 'over') { return '' }
     if ($state.Run -eq 'idle') { return '대기' }
@@ -672,7 +685,14 @@ function Paint-Bar($g) {
         $batonW = S 140
         $clockX = $pad + $batonW
         Paint-SpeakerBaton $g $pad (S 5) $batonW $true
-        Draw-Text $g $st.Text (FN 28) $dc $clockX 0 ($W - $clockX - $pad) (S 42) 'Center'
+        $clockW = $W - $clockX - $pad
+        if ($msg -eq $script:MsgBarFinish) {
+            Draw-Text $g $st.Text (FN 23) $dc $clockX 0 $clockW (S 27) 'Center'
+            Draw-Text $g $msg (FKM 12) $C.StripInk $clockX (S 24) $clockW (S 18) 'Center'
+            $msg = ''
+        } else {
+            Draw-Text $g $st.Text (FN 28) $dc $clockX 0 $clockW (S 42) 'Center'
+        }
         $headW = S 72
         Draw-Text $g $head (FKM 14) $C.StripInk $pad (S 42) $headW (S 40) 'Center'
         $messageX = $pad + $headW + (S 4)
@@ -688,11 +708,16 @@ function Paint-Bar($g) {
         Draw-Text $g $head (FKM 15) $C.StripInk $pad 0 $headW ($H - (S 4)) 'Center'
         Paint-SpeakerBaton $g ($pad + $headW) (S 12) $batonW $true
         $clockX = $pad + $headW + $batonW
-        Draw-Text $g $st.Text (FN 32) $dc $clockX 0 $clockW ($H - (S 4)) 'Center'
         $messageX = $clockX + $clockW
         $messageW = $btnBarRun.Left - $messageX - (S 8)
-        if ($messageW -gt (S 40)) {
-            Draw-Text $g $msg (FKM 12) $C.StripMute $messageX 0 $messageW ($H - (S 4))
+        if ($msg -eq $script:MsgBarFinish -and $messageW -lt (Measure-W $msg (FKM 12))) {
+            Draw-Text $g $st.Text (FN 28) $dc $clockX 0 $clockW (S 36) 'Center'
+            Draw-Text $g $msg (FKM 12) $C.StripInk $clockX (S 33) $clockW (S 19) 'Center'
+        } else {
+            Draw-Text $g $st.Text (FN 32) $dc $clockX 0 $clockW ($H - (S 4)) 'Center'
+            if ($messageW -gt (S 40)) {
+                Draw-Text $g $msg (FKM 12) $C.StripMute $messageX 0 $messageW ($H - (S 4))
+            }
         }
     }
     $th = S 4
@@ -735,7 +760,8 @@ function Paint-Stage($g) {
     Draw-Text $g $st.Text (Font-Px $famNum $px $numStyle) (Get-ClockColor $st) 0 $top $W $dh 'Center'
 
     $mc = $C.Sub
-    if ($st.Level -eq 'over' -or $st.Run -eq 'pause') { $msg = '' }
+    if (Test-FinishHint $st) { $msg = $script:MsgFinish; $mc = $C.Accent }
+    elseif ($st.Level -eq 'over' -or $st.Run -eq 'pause') { $msg = '' }
     elseif ($st.Closing) { $msg = Get-RemainingMessage $st.Rem }
     elseif (Test-UndoHint) { $msg = $script:MsgUndo; $mc = $C.Accent }
     elseif ($st.Run -eq 'idle' -and $st.Budget -le 0) { $msg = '시작하면 초과 시간을 기록합니다' }
@@ -769,16 +795,21 @@ function Refresh-All {
     if ($script:People.Count -eq 0) { return }
     $st = Get-Phase
     $btnRun.Text = switch ($st.Run) { 'run' { '일시정지' } 'pause' { '계속' } default { '시작' } }
-    $btnNext.Text = if ($script:Idx -ge $script:People.Count - 1) { '종료' } else { '다음' }
+    $isLast = $script:Idx -ge $script:People.Count - 1
+    $btnNext.Text = if ($isLast) { '종료' } else { '다음' }
     # Next/finish only while the clock runs: hidden before the start and while paused.
     $btnNext.Visible = $script:Sw.IsRunning
     $btnUndo.Enabled = Test-UndoAllowed
     $btnBarRun.Text = $btnRun.Text
     $btnBarNext.Text = $btnNext.Text
     $btnBarRun.Glyph = if ($script:Sw.IsRunning) { 'pause' } else { 'play' }
-    $btnBarNext.Glyph = if ($script:Idx -ge $script:People.Count - 1) { 'stop' } else { 'next' }
+    $btnBarNext.Glyph = if ($isLast) { 'stop' } else { 'next' }
+    $nextTip = if ($isLast) { '회의를 종료합니다 (N / →)' } else { '다음 발표자를 바로 시작합니다 (N / →)' }
+    if ($tips.GetToolTip($btnNext) -ne $nextTip) {
+        $tips.SetToolTip($btnNext, $nextTip)
+        $tips.SetToolTip($btnBarNext, $nextTip)
+    }
     $tips.SetToolTip($btnBarRun, ($btnRun.Text + ' (Space)'))
-    $tips.SetToolTip($btnBarNext, ($btnNext.Text + ' (N / →)'))
     $btnBarNext.Enabled = $script:Sw.IsRunning
     $btnBarUndo.Enabled = Test-UndoAllowed
     if ($script:BarMode) { Layout-BarControls }
@@ -856,8 +887,12 @@ function Reset-Current {
     Refresh-All
 }
 
+function Get-MinSpeakerCount {
+    $script:Idx + 1
+}
+
 function Set-Count([int]$n) {
-    $n = [math]::Max(1, [math]::Min(50, $n))
+    $n = [math]::Max((Get-MinSpeakerCount), [math]::Min(50, $n))
     if ($n -eq $script:People.Count) { return }
     $script:Undo = $null
     $wasRunning = $script:Sw.IsRunning
@@ -868,7 +903,6 @@ function Set-Count([int]$n) {
     while ($list.Count -gt $n) { $list.RemoveAt($list.Count - 1) }
     $script:BatonStarted = $null
     $script:People = $list.ToArray()
-    if ($script:Idx -ge $n) { $script:Idx = $n - 1 }
     if ($wasRunning) { Lock-Budget; $script:Sw.Start() }
     Refresh-All
 }
@@ -953,21 +987,29 @@ function Resolve-EndTime([datetime]$picked, [datetime]$original) {
 # Speakers who already finished stay counted; only the ones still to come are limited.
 $script:SetInitialEnd = $script:End
 $script:SetHintBase = '남은 회의 시간은 아직 시작하지 않은 발표자에게 자동으로 똑같이 나뉩니다.'
-function Update-SetMax([bool]$clamped = $false) {
+function Update-SetMax {
     $end = Resolve-EndTime $script:SetDt.Value $script:SetInitialEnd
     $leftSec = ($end - (Get-Date)).TotalSeconds
     $fit = [int][math]::Floor($leftSec / $script:MinShare)
-    $max = [math]::Min(50, [math]::Max($script:Idx + 1, $script:Idx + $fit))
+    $max = [math]::Min(50, [math]::Max((Get-MinSpeakerCount), $script:Idx + $fit))
     # Opening settings or changing preferences must preserve existing speakers.
     if ($end -eq $script:SetInitialEnd) { $max = [math]::Max($max, $script:People.Count) }
+    # Assigning Maximum can change Value immediately and raise ValueChanged.
+    $before = $script:SetNum.Value
+    $previousClamp = $script:SetCountBeforeClamp
     $script:SetNum.Maximum = [decimal]$max
-    if ($script:SetNum.Value -gt $max) { $script:SetNum.Value = [decimal]$max; $clamped = $true }
+    $after = $script:SetNum.Value
     if ($end.Date -gt (Get-Date).Date) { $script:SetEndLabel.Text = '종료 시각 · 다음 날' }
     else { $script:SetEndLabel.Text = '종료 시각' }
-    if ($leftSec -le 0) { $script:SetHint.Text = '회의 시간이 끝났습니다. 시작 시 초과 시간을 기록합니다.' }
-    elseif ($clamped) { $script:SetHint.Text = ('남은 시간에 맞춰 발표자 수를 {0}명으로 조정했습니다.' -f $max) }
-    elseif ($fit -lt (50 - $script:Idx)) { $script:SetHint.Text = ('남은 시간 기준 최대 {0}명입니다 (1인당 최소 1분).' -f $max) }
-    else { $script:SetHint.Text = $script:SetHintBase }
+    $script:SetHintDefault = if ($leftSec -le 0) { '회의 시간이 끝났습니다. 시작 시 초과 시간을 기록합니다.' }
+    elseif ($fit -lt (50 - $script:Idx)) { '남은 시간 기준 최대 {0}명입니다 (1인당 최소 1분).' -f $max }
+    else { $script:SetHintBase }
+    if ($after -lt $before) {
+        $script:SetCountBeforeClamp = if ($null -eq $previousClamp) { $before } else { $previousClamp }
+    }
+    $script:SetHint.Text = if ($null -ne $script:SetCountBeforeClamp) {
+        '남은 시간에 맞춰 발표자 수를 {0}명에서 {1}명으로 줄였습니다.' -f $script:SetCountBeforeClamp, $after
+    } else { $script:SetHintDefault }
 }
 
 function Show-Settings {
@@ -991,7 +1033,7 @@ function Show-Settings {
     $num = New-Object Windows.Forms.NumericUpDown
     $num.Name = 'SpeakerCount'
     $num.TabIndex = 0
-    $num.Minimum = 1
+    $num.Minimum = Get-MinSpeakerCount
     $num.Maximum = 50
     $num.Value = [decimal]$script:People.Count
     $num.Font = FK 15
@@ -1015,6 +1057,13 @@ function Show-Settings {
     $script:SetNum = $num
     $script:SetDt = $dt
     $script:SetHint = $h1
+    $script:SetCountBeforeClamp = $null
+    $num.add_ValueChanged({
+        if ($null -ne $script:SetCountBeforeClamp) {
+            $script:SetCountBeforeClamp = $null
+            $script:SetHint.Text = $script:SetHintDefault
+        }
+    })
     $dt.add_ValueChanged({ Update-SetMax })
     Update-SetMax
 
@@ -1089,7 +1138,6 @@ $btnDark.Font = $btnLight.Font
 $btnLight.AccessibleName = '밝은 화면'
 $btnDark.AccessibleName = '어두운 화면'
 $tips.SetToolTip($btnRun, '시작 / 일시정지 (Space)')
-$tips.SetToolTip($btnNext, '다음 발표자를 바로 시작합니다 (N / →)')
 $tips.SetToolTip($btnUndo, '직전 전환, 종료, 초기화 취소 (Ctrl+Z)')
 $tips.SetToolTip($btnSet, '발표자 수, 종료 시각, 항상 위 표시 설정 (S)')
 $tips.SetToolTip($btnBar, '화면 공유용 발표 막대 (B)')
@@ -1102,6 +1150,7 @@ $btnBarBack = New-Button '기본 창' 'quiet' 64 28 { Toggle-BarMode }
 $btnBarUndo.Glyph = 'undo'
 $btnBarBack.Glyph = 'window'
 $barButtons = @($btnBarRun,$btnBarNext,$btnBarUndo,$btnBarBack)
+foreach ($button in ($normalButtons + $barButtons)) { $button.RightIsInputKey = $true }
 $stage.Controls.AddRange($barButtons)
 $tab = 0
 foreach ($button in $barButtons) { $button.Visible = $false; $button.TabIndex = $tab; $tab++ }
@@ -1316,7 +1365,7 @@ $form.add_KeyDown({
     switch ($e.KeyCode) {
         'Space' { Toggle-Run }
         'N'     { Go-Next }
-        'Right' { Go-Next }
+        'Right' { if ($e.Modifiers -ne 'None') { return }; Go-Next }
         'R'     { Reset-Current }
         'Z'     { if ($e.Control) { Undo-Last } else { return } }
         'S'     { Show-Settings }
