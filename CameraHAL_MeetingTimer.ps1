@@ -4,9 +4,7 @@
 # - Enter only the number of speakers; the remaining meeting time is split
 #   automatically. Each speaker's share is locked when they start, so an
 #   overrun shrinks the shares of the people still waiting.
-# - Small always-on-top window in the bottom-right corner. When a speaker runs
-#   out of time while the window is minimized or in the background, its taskbar
-#   button flashes.
+# - A camera marks the current speaker. The overtime digits change color at +00:15.
 #
 # Visual style follows the HP-inspired DESIGN.md (getdesign.md/hp): white canvas,
 # #1a1a1a ink, a single #024ad8 accent, 4px buttons, 1px hairlines.
@@ -27,7 +25,6 @@ public static class MtNative {
     [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
     [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
     [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
-    [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
     [DllImport("dwmapi.dll")] static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int val, int size);
     // Dark title bar to match the dark theme (attribute 20 on current Windows 10/11, 19 on early 20H1 builds).
     public static void DarkTitle(IntPtr h, bool on) {
@@ -35,21 +32,6 @@ public static class MtNative {
         try {
             if (DwmSetWindowAttribute(h, 20, ref v, 4) != 0) DwmSetWindowAttribute(h, 19, ref v, 4);
         } catch { }
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    struct FLASHWINFO { public uint cbSize; public IntPtr hwnd; public uint dwFlags; public uint uCount; public uint dwTimeout; }
-    [DllImport("user32.dll")] static extern bool FlashWindowEx(ref FLASHWINFO pwfi);
-
-    // Flash caption + taskbar button until the window comes to the foreground.
-    public static void Flash(IntPtr h) {
-        FLASHWINFO f = new FLASHWINFO();
-        f.cbSize = (uint)Marshal.SizeOf(typeof(FLASHWINFO));
-        f.hwnd = h;
-        f.dwFlags = 3 | 12;            // FLASHW_ALL | FLASHW_TIMERNOFG
-        f.uCount = uint.MaxValue;
-        f.dwTimeout = 0;
-        FlashWindowEx(ref f);
     }
 
     public static GraphicsPath Round(RectangleF r, float rad) {
@@ -76,7 +58,6 @@ public class MtCanvas : Panel {
 // Native keyboard and accessibility behavior with custom painting.
 public class MtButton : Button {
     public Color Fill = Color.White, Fore = Color.Black, Border = Color.Empty, HoverFill = Color.Empty, PressFill = Color.Empty;
-    public Color PaintCanvas = Color.Empty;
     public string Glyph = "";
     public int Radius = 4;
     private bool hover, press;
@@ -105,7 +86,7 @@ public class MtButton : Button {
 
     protected override void OnPaint(PaintEventArgs e) {
         Graphics g = e.Graphics;
-        g.Clear(PaintCanvas != Color.Empty ? PaintCanvas : (Parent != null ? Parent.BackColor : BackColor));
+        g.Clear(Parent != null ? Parent.BackColor : BackColor);
         g.SmoothingMode = SmoothingMode.AntiAlias;
         Color f = Fill;
         if (press && PressFill != Color.Empty) f = PressFill;
@@ -199,9 +180,9 @@ $Themes = @{
         Paper = '#ffffff'; Ink = '#1a1a1a'; Sub = '#636363'; Hair = '#e8e8e8'; Band = '#f7f7f7'
         Strip = '#1a1a1a'; StripInk = '#ffffff'; StripMute = '#c2c2c2'; StripHover = '#292929'
         Accent = '#024ad8'; Plus = '#8fb4ff'; Warn = '#ff5050'; Zero = '#636363'
-        Crit = '#b3262b'; OverBg = '#b3262b'; OverPulse = '#5a1313'; OverInk = '#ffffff'; OverSub = '#f9d4d2'
+        Overtime = '#8a4d22'; BarOvertime = '#ebb186'; Camera = '#007858'; BarCamera = '#83e4bb'; ActiveSpeaker = '#dcefe8'; BarActiveSpeaker = '#29433a'
         IdleInk = '#3d3d3d'; IdleLine = '#c2c2c2'; Done = '#3d3d3d'
-        BarNotice = '#8fb4ff'; BarCrit = '#ff5050'; BarTrack = '#3d3d3d'
+        BarTrack = '#3d3d3d'
         BtnPrimary = '#024ad8'; BtnPrimaryInk = '#ffffff'; BtnPrimaryHover = '#0340b8'; BtnPrimaryPress = '#0e3191'
         BtnInk = '#1a1a1a'; BtnInkText = '#ffffff'; BtnInkLine = ''; BtnInkHover = '#292929'; BtnInkPress = '#000000'
     }
@@ -211,9 +192,9 @@ $Themes = @{
         Paper = '#07080a'; Ink = '#f4f4f6'; Sub = '#9c9c9d'; Hair = '#242728'; Band = '#0d0d0d'
         Strip = '#0d0d0d'; StripInk = '#f4f4f6'; StripMute = '#9c9c9d'; StripHover = '#1c1c1d'
         Accent = '#57c1ff'; Plus = '#57c1ff'; Warn = '#ff6161'; Zero = '#6a6b6c'
-        Crit = '#ff6161'; OverBg = '#a1131a'; OverPulse = '#5a0a0f'; OverInk = '#ffffff'; OverSub = '#f9d4d2'
+        Overtime = '#ebb186'; BarOvertime = '#ebb186'; Camera = '#83e4bb'; BarCamera = '#83e4bb'; ActiveSpeaker = '#1d382f'; BarActiveSpeaker = '#29433a'
         IdleInk = '#cdcdcd'; IdleLine = '#434345'; Done = '#8a8a8c'
-        BarNotice = '#57c1ff'; BarCrit = '#ff6161'; BarTrack = '#242728'
+        BarTrack = '#242728'
         BtnPrimary = '#ffffff'; BtnPrimaryInk = '#000000'; BtnPrimaryHover = '#e8e8e8'; BtnPrimaryPress = '#cfcfcf'
         BtnInk = '#121212'; BtnInkText = '#f4f4f6'; BtnInkLine = '#3a3d3f'; BtnInkHover = '#1c1c1d'; BtnInkPress = '#242728'
     }
@@ -249,7 +230,7 @@ function FN([double]$px)  { Font-Px $famNum ($px * $script:Scale) $numStyle }
 
 # ---------------- config ----------------
 function Load-Config {
-    $cfg = [pscustomobject]@{ Count = 6; Sound = $true; TopMost = $true; Theme = 'light'; Bar = $false; BarEdge = 'bottom' }
+    $cfg = [pscustomobject]@{ Count = 6; TopMost = $true; Theme = 'light'; Bar = $false; BarEdge = 'bottom' }
     # config.json is treated as untrusted data: plain JSON only (no object
     # deserialization), size-capped, and every field type- and range-checked.
     # Anything unexpected falls back to the defaults above.
@@ -264,7 +245,6 @@ function Load-Config {
         if (-not $raw) { $raw = $j.PSObject.Properties['Count'] }
         $n = 0
         if ($raw -and $raw.Value -is [int] -and [int]::TryParse("$($raw.Value)", [ref]$n) -and $n -ge 1 -and $n -le 50) { $cfg.Count = $n }
-        if ($j.Sound -is [bool]) { $cfg.Sound = $j.Sound }
         if ($j.TopMost -is [bool]) { $cfg.TopMost = $j.TopMost }
         if ($j.Bar -is [bool]) { $cfg.Bar = $j.Bar }
         if ($j.BarEdge -is [string] -and @('top','bottom','left','right') -ccontains $j.BarEdge) { $cfg.BarEdge = $j.BarEdge }
@@ -279,7 +259,6 @@ function Save-Config {
     # silently read as 1 when the key is missing.
     $json = [pscustomobject]@{
         Speakers = [int]$script:People.Count
-        Sound    = [bool]$script:Sound
         # The preference, not $form.TopMost: the presenter bar forces always-on-top.
         TopMost  = [bool]$script:TopMostPref
         Bar      = [bool]$script:BarMode
@@ -299,14 +278,12 @@ function Get-NextHour {
 }
 
 $script:Cfg = Load-Config
-$script:Sound = $script:Cfg.Sound
 $script:ThemeName = $script:Cfg.Theme
 $C = $Themes[$script:ThemeName]
 $script:End = Get-NextHour
 $script:Sw = New-Object System.Diagnostics.Stopwatch
 $script:People = @()
 $script:Idx = 0
-$script:EndFlashed = $false
 # Minimum share per speaker (seconds) and the first plan, fixed when the first speaker starts (0 = not set).
 $script:MinShare = 60
 $script:Plan = 0.0
@@ -389,30 +366,19 @@ function Get-Phase {
     $budget = Get-Budget $script:Idx
     $el = Get-Elapsed $script:Idx
     $rem = $budget - $el
-    # Warnings depend only on the remaining fraction of this speaker's locked budget.
+    # Keep phase boundaries relative to the locked budget; the final minute also shows guidance.
     $noticeAt = $budget * 0.3
     $criticalAt = $budget * 0.1
     $started = $script:People[$script:Idx].Started
     $level = if (-not $started -and $rem -le 0) { 'normal' } elseif ($rem -le 0) { 'over' } elseif ($rem -le $criticalAt) { 'critical' } elseif ($rem -le $noticeAt) { 'notice' } else { 'normal' }
     $run = if ($script:Sw.IsRunning) { 'run' } elseif (-not $started) { 'idle' } else { 'pause' }
     $text = if (-not $started -and $rem -le 0) { '00:00' } elseif ($rem -gt 0) { Fmt ([math]::Ceiling($rem)) } else { '+' + (Fmt ([math]::Floor(-$rem))) }
-    [pscustomobject]@{ El = $el; Rem = $rem; Budget = $budget; Level = $level; Run = $run; Text = $text; NoticeAt = $noticeAt; CriticalAt = $criticalAt }
+    $closing = $run -eq 'run' -and $rem -gt 0 -and ($rem -le 60 -or $rem -le $noticeAt)
+    [pscustomobject]@{ El = $el; Rem = $rem; Budget = $budget; Level = $level; Run = $run; Text = $text; Closing = $closing; Highlight = $started -and $rem -le -15 }
 }
 
 function New-Person {
-    [pscustomobject]@{ Used = 0.0; Budget = 0.0; Started = $false; W2 = $false; W1 = $false; Zero = $false; Over = 0 }
-}
-
-function Play([string]$kind) {
-    if ($script:Sound) { [System.Media.SystemSounds]::$kind.Play() }
-}
-
-function Test-Background {
-    $form.WindowState -eq 'Minimized' -or [MtNative]::GetForegroundWindow() -ne $form.Handle
-}
-
-function Flash-IfHidden {
-    if (Test-Background) { [MtNative]::Flash($form.Handle) }
+    [pscustomobject]@{ Used = 0.0; Budget = 0.0; Started = $false }
 }
 
 # ---------------- drawing helpers ----------------
@@ -483,11 +449,8 @@ function New-Button([string]$text, [string]$kind, [int]$w, [int]$h, [scriptblock
 
 # ---------------- minimum size ----------------
 # Coaching lines under the digits. Kept short on purpose: the longest one sets the window's minimum width.
-$script:MsgOver = '이제, 마침표를 찍을 시간입니다.'
-$script:MsgNotice = '이제, 핵심만 남겨 주세요.'
 $script:MsgIdle = '배정 {0} · 시작을 눌러 주세요'
-$script:MsgPause = '일시정지 · 계속을 눌러 주세요'
-$script:MsgCritical = '마지막 한 문장으로 마무리해 주세요.'
+$script:MsgPause = '일시정지'
 $script:MsgUndo = 'Ctrl+Z로 되돌리기'
 # Bottom row sizes (logical px): Start/Next buttons, then the theme and settings icons at the right edge.
 $script:RunW = 88
@@ -509,7 +472,7 @@ function Get-MinClientWidth {
     $topBar = Get-StripNeed $false '초과 예상'
     $band = (S 16) + (S $script:RunW) + (S 6) + (S $script:NextW) + (S 6) + (S 68) + (S 10) + (S 52) + (S 16)
     $head = (S 20) * 2 + (Measure-W '발표자 50' (FKM 16)) + (Measure-W ' / 50명' (FK 13)) + (Measure-W '초과 · 일시정지' (FKM 12)) + (S 18)
-    $msgs = @($script:MsgOver, $script:MsgNotice, $script:MsgPause, ($script:MsgIdle -f '00:00'), $script:MsgCritical, $script:MsgUndo)
+    $msgs = @('59분 59초 남았어요', $script:MsgPause, ($script:MsgIdle -f '00:00'), $script:MsgUndo)
     $coach = (S 20) * 2 + (($msgs | ForEach-Object { Measure-W $_ (FKM 13) } | Measure-Object -Maximum).Maximum)
     [math]::Max([math]::Max($topBar, $band), [math]::Max($head, $coach))
 }
@@ -550,6 +513,8 @@ $form.Controls.Add($strip)
 
 $timer = New-Object Windows.Forms.Timer
 $timer.Interval = 200
+$script:BatonStarted = $null
+$script:BarTwoRowWidth = 520
 
 # ---------------- painting ----------------
 
@@ -619,88 +584,125 @@ function Paint-Strip($g) {
     Draw-Text $g $pd.Text (FN 14) $pd.Color ($mid - [int]($dw / 2)) 0 ($dw + 2) $H
 }
 
-# The countdown and guidance stay clear of the native bar controls on every edge.
+# A centered five-slot window, clamped at either end of the speaker list.
+function Get-SpeakerWindow([int]$count, [int]$current) {
+    $size = [math]::Min(5, $count)
+    $first = [math]::Max(0, [math]::Min($current - 2, $count - $size))
+    [pscustomobject]@{ First = $first; Last = $first + $size - 1; Before = $first -gt 0; After = $first + $size -lt $count }
+}
+
+function Get-BatonOffset {
+    if ($null -eq $script:BatonStarted) { return 0.0 }
+    $t = [math]::Max(0.0, [math]::Min(1.0, ((Get-Date) - $script:BatonStarted).TotalMilliseconds / 240))
+    -[math]::Pow(1 - $t, 2)
+}
+
+function Paint-SpeakerBaton($g, [int]$left, [int]$top, [int]$width, [bool]$bar = $false) {
+    $n = $script:People.Count
+    $window = Get-SpeakerWindow $n $script:Idx
+    $slot = S 22
+    $rowW = ($window.Last - $window.First + 1) * $slot
+    $x = $left + [int](($width - $rowW) / 2)
+    $muted = if ($bar) { $C.StripMute } else { $C.Sub }
+    $ink = if ($bar) { $C.StripInk } else { $C.Ink }
+    $camera = if ($bar) { $C.BarCamera } else { $C.Camera }
+    $active = if ($bar) { $C.BarActiveSpeaker } else { $C.ActiveSpeaker }
+    $surface = if ($bar) { $C.Strip } else { $C.Paper }
+    $labelTop = $top + (S 14)
+    if ($window.Before) { Draw-Text $g '…' (FK 12) $muted ($x - (S 14)) $labelTop (S 14) (S 18) 'Center' }
+    if ($window.After) { Draw-Text $g '…' (FK 12) $muted ($x + $rowW) $labelTop (S 14) (S 18) 'Center' }
+    for ($i = $window.First; $i -le $window.Last; $i++) {
+        $slotX = $x + ($i - $window.First) * $slot
+        $fg = $muted
+        if ($i -eq $script:Idx) {
+            Fill-Round $g $active $slotX $labelTop $slot (S 18) (S 5)
+            $fg = $ink
+        }
+        Draw-Text $g ($i + 1) (FN 12) $fg $slotX $labelTop $slot (S 18) 'Center'
+    }
+    $center = $x + ($script:Idx - $window.First + 0.5 + (Get-BatonOffset)) * $slot
+    Fill-Round $g $camera ($center - (S 9)) ($top + (S 2)) (S 18) (S 11) (S 3)
+    Fill-Round $g $camera ($center - (S 4)) $top (S 8) (S 4) (S 1)
+    Fill-Round $g $surface ($center - (S 4)) ($top + (S 3)) (S 8) (S 8) (S 4)
+}
+
+function Get-RemainingMessage([double]$seconds) {
+    $whole = [int][math]::Ceiling($seconds)
+    $minutes = [int][math]::Floor($whole / 60)
+    $secs = $whole % 60
+    if ($minutes -eq 0) { return '{0}초 남았어요' -f $secs }
+    if ($secs -eq 0) { return '{0}분 남았어요' -f $minutes }
+    '{0}분 {1}초 남았어요' -f $minutes, $secs
+}
+
+function Get-BarMessage($state) {
+    if ($state.Run -eq 'pause') { return $script:MsgPause }
+    if ($state.Level -eq 'over') { return '' }
+    if ($state.Run -eq 'idle') { return '대기' }
+    if ($state.Closing) { return Get-RemainingMessage $state.Rem }
+    '진행 중'
+}
+
+function Get-ClockColor($state, [bool]$bar = $false) {
+    if ($bar) { if ($state.Highlight) { $C.BarOvertime } else { $C.StripInk } }
+    else { if ($state.Highlight) { $C.Overtime } else { $C.Ink } }
+}
+
 function Paint-Bar($g) {
     $W = $stage.ClientSize.Width; $H = $stage.ClientSize.Height
     if ($W -lt 50 -or $H -lt 10 -or $script:People.Count -eq 0) { return }
     $st = Get-Phase
-    $isOver = $st.Level -eq 'over'
-    if ($isOver) {
-        $flash = $st.Run -eq 'run' -and ([int][math]::Floor($st.El * 2) % 2) -eq 1
-        $bg = if ($flash) { $C.OverPulse } else { $C.OverBg }
-        $fg = $C.OverInk; $sub = $C.OverSub
-    } else {
-        $bg = $C.Strip; $fg = $C.StripInk; $sub = $C.StripMute
-    }
-    $g.Clear($bg)
-    $pad = S 16
-    $vertical = $script:BarEdge -eq 'left' -or $script:BarEdge -eq 'right'
-    $dc = Get-ProgressColor $st $true
+    $g.Clear($C.Strip)
+    $vertical = $script:BarEdge -in @('left','right')
+    $dc = Get-ClockColor $st $true
     $msg = Get-BarMessage $st
+    $head = '{0} / {1}명' -f ($script:Idx + 1), $script:People.Count
     if ($vertical) {
-        Draw-Text $g ('{0} / {1}명' -f ($script:Idx + 1), $script:People.Count) (FKM 15) $fg $pad (S 20) ($W - 2 * $pad) (S 28) 'Center'
-        $digitTop = [math]::Min((S 104), [int]($H * 0.2))
-        $digitPx = [math]::Min((S 44), $W / 4)
-        while ((Measure-W $st.Text (Font-Px $famNum $digitPx $numStyle)) -gt ($W - 2 * $pad) -and $digitPx -gt (S 16)) { $digitPx -= 1 }
-        Draw-Text $g $st.Text (Font-Px $famNum $digitPx $numStyle) $dc $pad $digitTop ($W - 2 * $pad) (S 64) 'Center'
-        $messageRect = New-Object Drawing.Rectangle($pad, ($digitTop + (S 76)), ($W - 2 * $pad), (S 76))
-        [Windows.Forms.TextRenderer]::DrawText($g, $msg, (FKM 13), $messageRect, $fg, [Windows.Forms.TextFormatFlags]'WordBreak, HorizontalCenter, VerticalCenter, NoPadding')
-        Draw-Text $g '드래그로 이동' (FK 11) $sub $pad (S 54) ($W - 2 * $pad) (S 20) 'Center'
-    } else {
-        $pad = S 12
+        $pad = S 10
+        $content = $W - 2 * $pad
+        Draw-Text $g $head (FKM 15) $C.StripInk $pad (S 14) $content (S 28) 'Center'
+        Paint-SpeakerBaton $g $pad (S 52) $content $true
+        $digitPx = [math]::Min((S 43), $W / 4)
+        while ((Measure-W $st.Text (Font-Px $famNum $digitPx $numStyle)) -gt $content -and $digitPx -gt (S 16)) { $digitPx -= 1 }
+        Draw-Text $g $st.Text (Font-Px $famNum $digitPx $numStyle) $dc $pad (S 94) $content (S 66) 'Center'
+        Draw-Text $g $msg (FKM 12) $C.StripMute $pad (S 162) $content (S 28) 'Center'
+    } elseif ($W -lt (S $script:BarTwoRowWidth)) {
+        # On a narrow monitor the clock and camera share the top row; controls stay below.
+        $pad = S 8
+        $batonW = S 140
+        $clockX = $pad + $batonW
+        Paint-SpeakerBaton $g $pad (S 5) $batonW $true
+        Draw-Text $g $st.Text (FN 28) $dc $clockX 0 ($W - $clockX - $pad) (S 42) 'Center'
         $headW = S 72
-        $clockW = S 124
-        $head = '{0} / {1}명' -f ($script:Idx + 1), $script:People.Count
-        Draw-Text $g $head (FKM 15) $fg $pad 0 $headW ($H - (S 4))
-        Draw-Text $g $st.Text (FN 32) $dc ($pad + $headW) 0 $clockW ($H - (S 4)) 'Center'
-        $messageX = $pad + $headW + $clockW + (S 4)
+        Draw-Text $g $head (FKM 14) $C.StripInk $pad (S 42) $headW (S 40) 'Center'
+        $messageX = $pad + $headW + (S 4)
+        $messageW = $btnBarRun.Left - $messageX - $pad
+        if ($messageW -gt (S 40)) {
+            Draw-Text $g $msg (FKM 12) $C.StripMute $messageX (S 42) $messageW (S 40)
+        }
+    } else {
+        $headW = S 72
+        $clockW = S 134
+        $batonW = S 146
+        $pad = S 12
+        Draw-Text $g $head (FKM 15) $C.StripInk $pad 0 $headW ($H - (S 4)) 'Center'
+        Paint-SpeakerBaton $g ($pad + $headW) (S 12) $batonW $true
+        $clockX = $pad + $headW + $batonW
+        Draw-Text $g $st.Text (FN 32) $dc $clockX 0 $clockW ($H - (S 4)) 'Center'
+        $messageX = $clockX + $clockW
         $messageW = $btnBarRun.Left - $messageX - (S 8)
         if ($messageW -gt (S 40)) {
-            if ($st.Run -eq 'pause') {
-                Draw-Text $g $msg (FKM 12) $fg $messageX 0 $messageW ($H - (S 4))
-            } else {
-                $messageRect = New-Object Drawing.Rectangle($messageX, (S 2), $messageW, ($H - (S 8)))
-                [Windows.Forms.TextRenderer]::DrawText($g, $msg, (FKM 12), $messageRect, $fg, [Windows.Forms.TextFormatFlags]'WordBreak, VerticalCenter, EndEllipsis, NoPadding')
-            }
+            Draw-Text $g $msg (FKM 12) $C.StripMute $messageX 0 $messageW ($H - (S 4))
         }
     }
     $th = S 4
-    $track = if ($isOver) { [Drawing.Color]::FromArgb(70, 255, 255, 255) } else { $C.BarTrack }
-    $b = New-Object Drawing.SolidBrush($track)
-    if ($vertical) { $g.FillRectangle($b, ($W - $th), 0, $th, $H) }
-    else { $g.FillRectangle($b, 0, ($H - $th), $W, $th) }
-    $b.Dispose()
-    $ratio = if ($st.Budget -gt 0) { [math]::Min(1.0, $st.El / $st.Budget) } elseif ($isOver) { 1.0 } else { 0 }
-    if ($ratio -gt 0) {
-        $b = New-Object Drawing.SolidBrush($dc)
-        if ($vertical) { $g.FillRectangle($b, ($W - $th), 0, $th, [int]($H * $ratio)) }
-        else { $g.FillRectangle($b, 0, ($H - $th), [int]($W * $ratio), $th) }
-        $b.Dispose()
-    }
-}
-
-function Get-BarMessage($state) {
-    if ($state.Run -eq 'pause') {
-        if ($state.Level -eq 'over') { return '시간 초과 · 일시정지' }
-        return '일시정지'
-    }
-    switch ($state.Level) {
-        'over' { return $script:MsgOver }
-        'critical' { return $script:MsgCritical }
-        'notice' { return $script:MsgNotice }
-    }
-    if ($state.Run -eq 'idle') { return '대기' }
-    '진행 중'
-}
-
-
-function Get-ProgressColor($state, [bool]$bar = $false) {
-    $pulse = $state.Run -eq 'run' -and ([int][math]::Floor($state.El * 2) % 2) -eq 1
-    switch ($state.Level) {
-        'over' { if ($pulse) { $C.OverSub } else { $C.OverInk } }
-        'critical' { if ($pulse) { if ($bar) { $C.OverSub } else { $C.OverPulse } } elseif ($bar) { $C.BarCrit } else { $C.Crit } }
-        'notice' { if ($bar) { $C.BarNotice } else { $C.Accent } }
-        default { if ($bar) { $C.StripInk } else { $C.Ink } }
+    $ratio = if ($st.Budget -gt 0) { [math]::Min(1.0, $st.El / $st.Budget) } elseif ($st.Level -eq 'over') { 1.0 } else { 0 }
+    if ($vertical) {
+        Fill-Round $g $C.BarTrack ($W - $th) 0 $th $H 0
+        Fill-Round $g $C.StripMute ($W - $th) 0 $th ($H * $ratio) 0
+    } else {
+        Fill-Round $g $C.BarTrack 0 ($H - $th) $W $th 0
+        Fill-Round $g $C.StripMute 0 ($H - $th) ($W * $ratio) $th 0
     }
 }
 
@@ -709,72 +711,50 @@ function Paint-Stage($g) {
     $W = $stage.ClientSize.Width; $H = $stage.ClientSize.Height
     if ($W -lt 50 -or $H -lt 50 -or $script:People.Count -eq 0) { return }
     $st = Get-Phase
-    $isOver = $st.Level -eq 'over'
-
-    if ($isOver) {
-        # Red slab, pulsing to wine every half second while the clock runs.
-        $flash = $st.Run -eq 'run' -and ([int][math]::Floor($st.El * 2) % 2) -eq 1
-        $bg = if ($flash) { $C.OverPulse } else { $C.OverBg }
-        $fg = $C.OverInk; $sub = $C.OverSub
-    } else {
-        $bg = $C.Paper; $fg = $C.Ink; $sub = $C.Sub
-    }
-    $g.Clear($bg)
+    $g.Clear($C.Paper)
     $pad = S 20
     $cw = $W - 2 * $pad
 
-    # Header row: speaker counter + state badge
     $head = '발표자 {0}' -f ($script:Idx + 1)
     $hw = Measure-W $head (FKM 16)
-    Draw-Text $g $head (FKM 16) $fg $pad (S 14) ($hw + 2) (S 26)
-    Draw-Text $g (' / {0}명' -f $script:People.Count) (FK 13) $sub ($pad + $hw) (S 14) (S 80) (S 26)
-    if ($isOver)                 { $bt = $(if ($st.Run -eq 'pause') { '초과 · 일시정지' } else { '시간 초과' }); $bf = $C.OverInk; $bc = $C.OverBg;   $bb = $NoColor }
-    elseif ($st.Run -eq 'run')   { $bt = '진행 중';  $bf = $C.Ink;      $bc = $C.Paper;    $bb = $NoColor }
-    elseif ($st.Run -eq 'pause') { $bt = '일시정지'; $bf = $NoColor;    $bc = $C.Ink;      $bb = $C.Ink }
-    else                         { $bt = '대기';     $bf = $NoColor;    $bc = $C.IdleInk;  $bb = $C.IdleLine }
-    [void](Draw-PillRight $g $bt (FKM 12) $bf $bc $bb ($W - $pad) (S 15) (S 24))
+    Draw-Text $g $head (FKM 16) $C.Ink $pad (S 14) ($hw + 2) (S 26)
+    Draw-Text $g (' / {0}명' -f $script:People.Count) (FK 13) $C.Sub ($pad + $hw) (S 14) (S 80) (S 26)
+    if ($st.Level -eq 'over') {
+        $bt = if ($st.Run -eq 'pause') { '초과 · 일시정지' } else { '시간 초과' }
+        $bc = $C.Sub; $bb = $C.IdleLine
+    } else {
+        $bt = switch ($st.Run) { 'run' { '진행 중' } 'pause' { '일시정지' } default { '대기' } }
+        $bc = $C.Ink; $bb = $C.IdleLine
+    }
+    [void](Draw-PillRight $g $bt (FKM 12) $NoColor $bc $bb ($W - $pad) (S 15) (S 24))
 
-    # Countdown digits
     $top = S 40
-    $bottom = $H - (S 58)
+    $bottom = $H - (S 66)
     $dh = [math]::Max((S 30), $bottom - $top)
-    $px = [math]::Max(20, [math]::Min($dh * 0.82, $W / 3.5))
-    $dc = switch ($st.Level) { 'over' { $C.OverInk } 'critical' { $C.Crit } 'notice' { $C.Accent } default { $C.Ink } }
-    Draw-Text $g $st.Text (Font-Px $famNum $px $numStyle) $dc 0 $top $W $dh 'Center'
+    $px = [math]::Max((S 20), [math]::Min($dh * 0.82, $W / 3.5))
+    Draw-Text $g $st.Text (Font-Px $famNum $px $numStyle) (Get-ClockColor $st) 0 $top $W $dh 'Center'
 
-    # Coaching line (visible to everyone when the screen is shared)
-    $mc = $sub
-    if ($isOver -and $st.Run -eq 'pause') { $msg = $script:MsgPause; $mc = $C.OverInk }
-    elseif ($isOver) { $msg = $script:MsgOver; $mc = $C.OverInk }
+    $mc = $C.Sub
+    if ($st.Level -eq 'over' -or $st.Run -eq 'pause') { $msg = '' }
+    elseif ($st.Closing) { $msg = Get-RemainingMessage $st.Rem }
     elseif (Test-UndoHint) { $msg = $script:MsgUndo; $mc = $C.Accent }
     elseif ($st.Run -eq 'idle' -and $st.Budget -le 0) { $msg = '시작하면 초과 시간을 기록합니다' }
     elseif ($st.Run -eq 'idle') { $msg = $script:MsgIdle -f (Fmt $st.Budget) }
-    elseif ($st.Run -eq 'pause') { $msg = $script:MsgPause }
-    elseif ($st.Level -eq 'critical') { $msg = $script:MsgCritical; $mc = $C.Crit }
-    elseif ($st.Level -eq 'notice') { $msg = $script:MsgNotice; $mc = $C.Accent }
     else { $msg = '배정 {0}' -f (Fmt $st.Budget) }
     Draw-Text $g $msg (FKM 13) $mc $pad $bottom $cw (S 22) 'Center'
+    Paint-SpeakerBaton $g $pad ($H - (S 41)) $cw
 
-    # One segment per speaker; the current one fills up as time passes.
     $n = $script:People.Count
     $gap = if ($n -gt 12) { S 2 } else { S 4 }
-    $sh = S 6
-    $sy = $H - (S 24)
     $segW = ($cw - $gap * ($n - 1)) / $n
-    $track = if ($isOver) { [Drawing.Color]::FromArgb(70, 255, 255, 255) } else { $C.Hair }
     for ($i = 0; $i -lt $n; $i++) {
         $x = $pad + $i * ($segW + $gap)
-        Fill-Round $g $track $x $sy $segW $sh (S 3)
-        $el = Get-Elapsed $i
+        Fill-Round $g $C.Hair $x ($H - (S 7)) $segW (S 3) (S 1)
         if ($i -eq $script:Idx) {
-            $fill = Get-ProgressColor $st
-            $ratio = if ($st.Budget -gt 0) { [math]::Min(1.0, $el / $st.Budget) } else { 1.0 }
-            Fill-Round $g $fill $x $sy ($segW * $ratio) $sh (S 3)
-        } elseif ($el -gt 0) {
-            $b = $script:People[$i].Budget
-            $fill = if ($b -gt 0 -and $el -gt $b) { $C.Warn } else { $C.Done }
-            if ($isOver -and $fill -eq $C.Done) { $fill = $C.OverSub }
-            Fill-Round $g $fill $x $sy $segW $sh (S 3)
+            $ratio = if ($st.Budget -gt 0) { [math]::Min(1.0, $st.El / $st.Budget) } elseif ($st.Level -eq 'over') { 1.0 } else { 0 }
+            Fill-Round $g $C.Sub $x ($H - (S 7)) ($segW * $ratio) (S 3) (S 1)
+        } elseif ((Get-Elapsed $i) -gt 0) {
+            Fill-Round $g $C.Done $x ($H - (S 7)) $segW (S 3) (S 1)
         }
     }
 }
@@ -801,49 +781,11 @@ function Refresh-All {
     $tips.SetToolTip($btnBarNext, ($btnNext.Text + ' (N / →)'))
     $btnBarNext.Enabled = $script:Sw.IsRunning
     $btnBarUndo.Enabled = Test-UndoAllowed
-    $canvas = $C.Strip
-    if ($st.Level -eq 'over') {
-        $pulse = $st.Run -eq 'run' -and ([int][math]::Floor($st.El * 2) % 2) -eq 1
-        $canvas = if ($pulse) { $C.OverPulse } else { $C.OverBg }
-    }
-    foreach ($button in $barButtons) {
-        if ($button.PaintCanvas -ne $canvas) { $button.PaintCanvas = $canvas; $button.Invalidate() }
-    }
-    if ($script:BarMode) { Update-BarBounds; Layout-BarControls }
+    if ($script:BarMode) { Layout-BarControls }
     # The title doubles as the taskbar label while minimized.
     $form.Text = '{0} · 발표자 {1}/{2} · CameraHAL_MeetingTimer' -f $st.Text, ($script:Idx + 1), $script:People.Count
     $strip.Invalidate()
     $stage.Invalidate()
-}
-
-function Check-Alerts {
-    $p = $script:People[$script:Idx]
-    $st = Get-Phase
-    $alerted = $false
-    if ($st.Run -eq 'run') {
-        # If a delayed tick crosses several boundaries, emit the current warning once.
-        if ($st.Rem -le 0) {
-            $p.W2 = $true; $p.W1 = $true
-            if (-not $p.Zero) { $p.Zero = $true; Play 'Hand'; Flash-IfHidden; $alerted = $true }
-        } elseif ($st.Rem -le $st.CriticalAt) {
-            $p.W2 = $true
-            if (-not $p.W1) { $p.W1 = $true; Play 'Exclamation' }
-        } elseif (-not $p.W2 -and $st.Rem -le $st.NoticeAt) {
-            $p.W2 = $true; Play 'Asterisk'
-        }
-        if ($st.Rem -lt 0) {
-            # Repeat the alarm (and the taskbar flash) every 30 seconds of overtime.
-            $n = [int][math]::Floor(-$st.Rem / 30)
-            if ($n -gt $p.Over) {
-                $p.Over = $n
-                if (-not $alerted) { Play 'Hand'; Flash-IfHidden; $alerted = $true }
-            }
-        }
-    }
-    if (-not $script:EndFlashed -and (Get-MeetingLeft) -le 0) {
-        $script:EndFlashed = $true
-        if (-not $alerted) { Play 'Hand'; Flash-IfHidden }
-    }
 }
 
 function Confirm-Action([string]$message, [string]$title) {
@@ -895,7 +837,9 @@ function Go-Next {
         Commit-Current
         Start-Over
     } else {
+        $script:BatonStarted = Get-Date
         Switch-To ($script:Idx + 1)
+        if ($timer) { $timer.Interval = 30 }
     }
 }
 
@@ -922,6 +866,7 @@ function Set-Count([int]$n) {
     foreach ($p in $script:People) { $list.Add($p) }
     while ($list.Count -lt $n) { $list.Add((New-Person)) }
     while ($list.Count -gt $n) { $list.RemoveAt($list.Count - 1) }
+    $script:BatonStarted = $null
     $script:People = $list.ToArray()
     if ($script:Idx -ge $n) { $script:Idx = $n - 1 }
     if ($wasRunning) { Lock-Budget; $script:Sw.Start() }
@@ -929,11 +874,11 @@ function Set-Count([int]$n) {
 }
 
 function Start-Over {
+    $script:BatonStarted = $null
     $script:Sw.Reset()
     $script:People = @(1..$script:Cfg.Count | ForEach-Object { New-Person })
     $script:Idx = 0
     $script:End = Get-NextHour
-    $script:EndFlashed = $false
     $script:Plan = 0.0
     Refresh-All
 }
@@ -948,7 +893,7 @@ function Save-Undo([string]$kind) {
     # Fold the running stopwatch into the copy, the same way Commit-Current would.
     $copy[$script:Idx].Used = Get-Elapsed $script:Idx
     $script:Undo = [pscustomobject]@{
-        Kind = $kind; People = $copy; Idx = $script:Idx; End = $script:End; EndFlashed = $script:EndFlashed
+        Kind = $kind; People = $copy; Idx = $script:Idx; End = $script:End
         Plan = $script:Plan; Running = $script:Sw.IsRunning; At = Get-Date
     }
 }
@@ -963,10 +908,10 @@ function Undo-Last {
     if (-not (Test-UndoAllowed)) { return }
     $script:Undo = $null
     $script:Sw.Reset()
+    $script:BatonStarted = $null
     $script:People = $u.People
     $script:Idx = $u.Idx
     $script:End = $u.End
-    $script:EndFlashed = $u.EndFlashed
     $script:Plan = $u.Plan
     if ($u.Running) {
         $script:People[$script:Idx].Used += [math]::Max(0, ((Get-Date) - $u.At).TotalSeconds)
@@ -1013,7 +958,7 @@ function Update-SetMax([bool]$clamped = $false) {
     $leftSec = ($end - (Get-Date)).TotalSeconds
     $fit = [int][math]::Floor($leftSec / $script:MinShare)
     $max = [math]::Min(50, [math]::Max($script:Idx + 1, $script:Idx + $fit))
-    # Opening settings or changing sound must never silently remove existing speakers.
+    # Opening settings or changing preferences must preserve existing speakers.
     if ($end -eq $script:SetInitialEnd) { $max = [math]::Max($max, $script:People.Count) }
     $script:SetNum.Maximum = [decimal]$max
     if ($script:SetNum.Value -gt $max) { $script:SetNum.Value = [decimal]$max; $clamped = $true }
@@ -1029,7 +974,7 @@ function Show-Settings {
     $dlg = New-Object Windows.Forms.Form
     $dlg.Name = 'Settings'
     $dlg.Text = 'CameraHAL_MeetingTimer'
-    $dlg.ClientSize = New-Object Drawing.Size((S 340), (S 412))
+    $dlg.ClientSize = New-Object Drawing.Size((S 340), (S 382))
     $dlg.StartPosition = 'CenterParent'
     $dlg.FormBorderStyle = 'FixedDialog'
     $dlg.MaximizeBox = $false
@@ -1081,39 +1026,30 @@ function Show-Settings {
     $cbTop.Checked = $script:TopMostPref
     $cbTop.SetBounds((S 24), (S 192), (S 292), (S 26))
 
-    $cbSound = New-Object Windows.Forms.CheckBox
-    $cbSound.TabIndex = 3
-    $cbSound.Text = '알림음 사용 (마감 직전, 시간 초과)'
-    $cbSound.Font = FK 14
-    $cbSound.ForeColor = $L.Ink
-    $cbSound.Checked = $script:Sound
-    $cbSound.SetBounds((S 24), (S 222), (S 292), (S 26))
-
     $script:SetDlg = $dlg
     $script:SetStartOver = $false
     $restart = New-Button '새 회의 시작' 'quiet' 120 36 {
         $r = [Windows.Forms.MessageBox]::Show($script:SetDlg, "기록을 모두 지우고 종료 시각을 다음 정각으로 되돌립니다.`n진행할까요?", '새 회의', 'YesNo', 'Warning')
         if ($r -eq 'Yes') { $script:SetStartOver = $true; $script:SetDlg.DialogResult = 'OK'; $script:SetDlg.Close() }
     } $L
-    $restart.TabIndex = 4
-    $restart.Location = New-Object Drawing.Point((S 24), (S 270))
-    $h2 = New-DlgLabel "기록을 지우고, 종료 시각을`n다음 정각으로 되돌립니다." (FK 12) $L.Sub 156 268 170 40
+    $restart.TabIndex = 3
+    $restart.Location = New-Object Drawing.Point((S 24), (S 240))
+    $h2 = New-DlgLabel "기록을 지우고, 종료 시각을`n다음 정각으로 되돌립니다." (FK 12) $L.Sub 156 238 170 40
 
     $save = New-Button '저장' 'primary' 92 40 { $script:SetDlg.DialogResult = 'OK'; $script:SetDlg.Close() } $L
-    $save.TabIndex = 6
+    $save.TabIndex = 5
     $dlg.AcceptButton = $save
-    $save.Location = New-Object Drawing.Point((S 224), (S 348))
+    $save.Location = New-Object Drawing.Point((S 224), (S 318))
     $cancel = New-Button '취소' 'outline' 84 40 { $script:SetDlg.DialogResult = 'Cancel'; $script:SetDlg.Close() } $L
-    $cancel.TabIndex = 5
+    $cancel.TabIndex = 4
     $dlg.CancelButton = $cancel
-    $cancel.Location = New-Object Drawing.Point((S 132), (S 348))
+    $cancel.Location = New-Object Drawing.Point((S 132), (S 318))
 
-    $dlg.Controls.AddRange(@($title, $l1, $num, $l2, $dt, $h1, $cbTop, $cbSound, $restart, $h2, $cancel, $save))
+    $dlg.Controls.AddRange(@($title, $l1, $num, $l2, $dt, $h1, $cbTop, $restart, $h2, $cancel, $save))
 
     if ($dlg.ShowDialog($form) -eq 'OK') {
         $script:TopMostPref = $cbTop.Checked
         $form.TopMost = $script:TopMostPref -or $script:BarMode
-        $script:Sound = $cbSound.Checked
         $script:Cfg.Count = [int]$num.Value
         # Unrelated preference changes preserve the recovery snapshot.
         if ($script:SetStartOver) {
@@ -1123,7 +1059,7 @@ function Show-Settings {
             # Picked time is today's; if it is already past, it means tomorrow.
             $end = Resolve-EndTime $dt.Value $script:SetInitialEnd
             $changed = $end -ne $script:End -or $script:Cfg.Count -ne $script:People.Count
-            if ($end -ne $script:End) { $script:End = $end; $script:EndFlashed = $false }
+            if ($end -ne $script:End) { $script:End = $end }
             Set-Count $script:Cfg.Count
             # A different end time or speaker count makes the old first plan meaningless.
             if ($changed) { $script:Undo = $null; Reset-Plan }
@@ -1155,7 +1091,7 @@ $btnDark.AccessibleName = '어두운 화면'
 $tips.SetToolTip($btnRun, '시작 / 일시정지 (Space)')
 $tips.SetToolTip($btnNext, '다음 발표자를 바로 시작합니다 (N / →)')
 $tips.SetToolTip($btnUndo, '직전 전환, 종료, 초기화 취소 (Ctrl+Z)')
-$tips.SetToolTip($btnSet, '발표자 수, 종료 시각, 알림음 설정 (S)')
+$tips.SetToolTip($btnSet, '발표자 수, 종료 시각, 항상 위 표시 설정 (S)')
 $tips.SetToolTip($btnBar, '화면 공유용 발표 막대 (B)')
 $tips.SetToolTip($btnLight, '밝은 화면')
 $tips.SetToolTip($btnDark, '어두운 화면')
@@ -1218,7 +1154,7 @@ function Choose-Theme([string]$name) {
 }
 
 $stage.add_Paint({ param($s, $e) Paint-Stage $e.Graphics })
-# The bar has no buttons or title bar; double-click (or B / Esc) returns to the normal window.
+# Double-clicking empty bar space (or pressing B / Esc) restores the normal window.
 $stage.add_DoubleClick({ if ($script:BarMode) { Set-BarMode $false } })
 
 # ---------------- presenter bar ----------------
@@ -1226,17 +1162,17 @@ $stage.add_DoubleClick({ if ($script:BarMode) { Set-BarMode $false } })
 # and covers content. Bar mode turns the window into a thin always-on-top strip across
 # the chosen edge of its screen, so the countdown is visible to everyone in the call.
 $script:BarMode = $false
-$script:BarH = 52
-$script:BarWarning = $false
+$script:BarH = 58
 $script:BarEdge = $script:Cfg.BarEdge
 $script:NormalBounds = $null
 $script:BarDrag = $null
 
 # WorkingArea keeps every dock position clear of the Windows taskbar.
-function Get-BarBounds($wa, [string]$edge = $script:BarEdge, [bool]$warning = ([bool]$script:BarWarning)) {
-    $height = [math]::Min($wa.Height, (S $script:BarH))
-    $width = [math]::Min($wa.Width, (S $(if ($warning) { 620 } else { 430 })))
-    $sideWidth = [math]::Min($wa.Width, (S $(if ($warning) { 180 } else { 128 })))
+function Get-BarBounds($wa, [string]$edge = $script:BarEdge) {
+    $width = [math]::Min($wa.Width, (S 650))
+    $height = if ($width -lt (S $script:BarTwoRowWidth)) { S 88 } else { S $script:BarH }
+    $height = [math]::Min($wa.Height, $height)
+    $sideWidth = [math]::Min($wa.Width, (S 164))
     $sideHeight = [math]::Min($wa.Height, (S 320))
     $centerX = $wa.Left + [int](($wa.Width - $width) / 2)
     $centerY = $wa.Top + [int](($wa.Height - $sideHeight) / 2)
@@ -1246,14 +1182,6 @@ function Get-BarBounds($wa, [string]$edge = $script:BarEdge, [bool]$warning = ([
         'right' { New-Object Drawing.Rectangle(($wa.Right - $sideWidth), $centerY, $sideWidth, $sideHeight) }
         default { New-Object Drawing.Rectangle($centerX, ($wa.Bottom - $height), $width, $height) }
     }
-}
-
-function Update-BarBounds {
-    if (-not $script:BarMode -or $script:BarDrag) { return }
-    $warning = (Get-Phase).Level -in @('notice','critical','over')
-    if ($warning -eq $script:BarWarning) { return }
-    $script:BarWarning = $warning
-    $form.Bounds = Get-BarBounds ([Windows.Forms.Screen]::FromControl($form).WorkingArea)
 }
 
 function Get-NearestBarEdge($point, $wa) {
@@ -1283,11 +1211,13 @@ function Layout-BarControls {
         }
     } else {
         $x = $stage.ClientSize.Width - (S 12)
+        $y = if ($stage.ClientSize.Width -lt (S $script:BarTwoRowWidth)) { $stage.ClientSize.Height - (S 42) }
+             else { [int](($stage.ClientSize.Height - (S 36)) / 2) }
         for ($i = $barButtons.Count - 1; $i -ge 0; $i--) {
             $button = $barButtons[$i]
             $button.Size = New-Object Drawing.Size((S 32), (S 32))
             $x -= $button.Width
-            $button.Location = New-Object Drawing.Point($x, ([int](($stage.ClientSize.Height - $button.Height - (S 4)) / 2)))
+            $button.Location = New-Object Drawing.Point($x, $y)
             $x -= S 4
         }
     }
@@ -1307,7 +1237,6 @@ function Set-BarMode([bool]$on) {
     $script:BarDrag = $null
     $stage.Capture = $false
     $script:BarMode = $on
-    $script:BarWarning = (Get-Phase).Level -in @('notice','critical','over')
     $form.SuspendLayout()
     if ($on) {
         $script:NormalBounds = $form.Bounds
@@ -1392,7 +1321,6 @@ $form.add_KeyDown({
         'Z'     { if ($e.Control) { Undo-Last } else { return } }
         'S'     { Show-Settings }
         'D'     { Choose-Theme $(if ($script:ThemeName -eq 'dark') { 'light' } else { 'dark' }) }
-        'M'     { $script:Sound = -not $script:Sound }
         'B'     { Toggle-BarMode }
         'Escape' { if ($script:BarMode) { Toggle-BarMode } else { return } }
         default { return }
@@ -1402,7 +1330,10 @@ $form.add_KeyDown({
 })
 
 $timer.add_Tick({
-    Check-Alerts
+    if ($timer.Interval -ne 200 -and (Get-BatonOffset) -eq 0) {
+        $script:BatonStarted = $null
+        $timer.Interval = 200
+    }
     Refresh-All
 })
 

@@ -40,10 +40,7 @@ function New-FakeStopwatch {
 }
 
 # UI hooks the logic calls; recorded or ignored.
-$script:Sounds = New-Object System.Collections.Generic.List[string]
 function Refresh-All { }
-function Flash-IfHidden { }
-function Play([string]$kind) { $script:Sounds.Add($kind) }
 function Confirm-Action { $script:ConfirmCalls++; $script:ConfirmResult }
 
 # Fresh meeting: $n speakers, clock at $at, meeting end at $end.
@@ -53,7 +50,6 @@ function New-Meeting([int]$n, [string]$at = '14:00:00', [string]$end = '15:00:00
     $script:MinShare = 60
     $script:Cfg = [pscustomobject]@{ Count = $n }
     $script:Undo = $null
-    $script:Sounds.Clear()
     $script:ConfirmResult = $true
     $script:ConfirmCalls = 0
     Start-Over
@@ -119,22 +115,72 @@ Check '3 x 1 min fits in 3 min' (Test-Overbooked) $false
 Check 'Calc-Share with nobody pending' (Calc-Share 100 0 0 60) 0
 Check 'Calc-Share floors to whole seconds' (Calc-Share 100 0 3 0) 33
 
-# ---------------- phases and alerts ----------------
+# ---------------- quiet countdown and overtime ----------------
 New-Meeting 6
 Toggle-Run
 Step 419; Check 'normal above 30 percent left' (Get-Phase).Level 'normal'
 Step 1;   Check 'notice at 30 percent left' (Get-Phase).Level 'notice'
-Check-Alerts
 Step 120; Check 'critical at 10 percent left' (Get-Phase).Level 'critical'
-Check-Alerts
-Step 60;  Check 'over at zero' (Get-Phase).Level 'over'
+Check 'exactly one minute left is read naturally' (Get-RemainingMessage (Get-Phase).Rem) '1분 남았어요'
+Check 'mixed minutes and seconds are shown' (Get-RemainingMessage 65) '1분 5초 남았어요'
+Check 'remaining seconds use countdown rounding' (Get-RemainingMessage 0.2) '1초 남았어요'
+Step 60
+Check 'over at zero' (Get-Phase).Level 'over'
 Check 'countdown text at zero' (Get-Phase).Text '+00:00'
-Check-Alerts
-Check-Alerts
-Check 'each warning sounds once' ($script:Sounds -join ',') 'Asterisk,Exclamation,Hand'
-Step 30; Check-Alerts
-Check 'overtime repeats every 30 s' $script:Sounds.Count 4
-Check 'overtime text' (Get-Phase).Text '+00:30'
+Check 'zero overtime is neutral' (Get-Phase).Highlight $false
+Step 14.999
+Check 'last unaccented time still displays +00:14' (Get-Phase).Text '+00:14'
+Check 'overtime below fifteen seconds is neutral' (Get-Phase).Highlight $false
+Step 0.001
+Check 'highlight begins at +00:15' (Get-Phase).Text '+00:15'
+Check 'overtime at fifteen seconds is highlighted' (Get-Phase).Highlight $true
+Toggle-Run
+Step 30
+Check 'paused overtime retains emphasis' (Get-Phase).Highlight $true
+Check 'paused overtime retains its reading' (Get-Phase).Text '+00:15'
+
+# A one-minute cue is visible even when one minute exceeds 30% of the allocation.
+New-Meeting 1 '14:57:00' '15:00:00'
+Toggle-Run
+Step 119
+Check 'three-minute share at 61 seconds is still quiet' (Get-BarMessage (Get-Phase)) '진행 중'
+Step 1
+Check 'three-minute share is still above the 30% boundary' (Get-Phase).Level 'normal'
+Check 'three-minute share shows the closing cue at one minute' (Get-Phase).Closing $true
+Check 'the presenter bar reads one minute accurately' (Get-BarMessage (Get-Phase)) '1분 남았어요'
+New-Meeting 1 '14:58:00' '15:00:00'
+Toggle-Run
+Step 60
+Check 'two-minute share also shows the cue at one minute' (Get-BarMessage (Get-Phase)) '1분 남았어요'
+
+# The camera visits consecutive nearby speaker numbers and animates on Next only.
+foreach ($case in @(
+    @(1, 0, '1'), @(4, 3, '1 2 3 4'), @(5, 1, '1 2 3 4 5'),
+    @(20, 0, '1 2 3 4 5 …'), @(20, 11, '… 10 11 12 13 14 …'), @(50, 49, '… 46 47 48 49 50')
+)) {
+    $window = Get-SpeakerWindow $case[0] $case[1]
+    $labels = @()
+    if ($window.Before) { $labels += '…' }
+    $labels += ($window.First + 1)..($window.Last + 1)
+    if ($window.After) { $labels += '…' }
+    Check "speaker window for index $($case[1]) of $($case[0])" ($labels -join ' ') $case[2]
+}
+New-Meeting 3
+Toggle-Run
+Check 'starting the first clock leaves the camera in place' (Get-BatonOffset) 0
+Go-Next
+Check 'early Next starts the camera at the prior slot' (Get-BatonOffset) -1
+Step 0.12
+Check 'camera moves toward its destination' (Get-BatonOffset) -0.25
+Toggle-Run
+Check 'pause does not restart the camera' (Get-BatonOffset) -0.25
+Step 0.12
+Check 'camera settles after a single movement' (Get-BatonOffset) 0
+Undo-Last
+Check 'undo restores the camera immediately' (Get-BatonOffset) 0
+Step 1300
+Go-Next
+Check 'Next after overtime animates the same camera movement' (Get-BatonOffset) -1
 
 # Short shares use the same percentage boundaries.
 New-Meeting 6 '14:57:00' '15:00:00'
@@ -238,12 +284,11 @@ Check 'shrinking keeps the speaker list valid' $script:People.Count 2
 # ---------------- presenter bar ----------------
 Add-Type -AssemblyName System.Drawing
 $script:Scale = 1.0
-$script:BarH = 52
-$script:BarW = 180
+$script:BarH = 58
 $script:BarEdge = 'bottom'
 $bar = Get-BarBounds (New-Object Drawing.Rectangle(1920, 0, 1920, 1040))
-Check 'compact bar is centered along the bottom' ("{0},{1},{2}" -f $bar.X, $bar.Y, $bar.Width) '2665,988,430'
-Check 'bar height' $bar.Height 52
+Check 'compact bar is centered along the bottom' ("{0},{1},{2}" -f $bar.X, $bar.Y, $bar.Width) '2555,982,650'
+Check 'bar height' $bar.Height 58
 
 # ---------------- config (untrusted input) ----------------
 $script:ConfigFile = Join-Path ([IO.Path]::GetTempPath()) ('mt-test-{0}.json' -f [guid]::NewGuid())
@@ -270,7 +315,7 @@ foreach ($edge in @('top','bottom','left','right')) {
     $bounds = Get-BarBounds $screenArea $edge
     Check "$edge dock stays within monitor" ($screenArea.Contains($bounds)) $true
 }
-Check 'left dock width' (Get-BarBounds $screenArea 'left').Width 128
+Check 'left dock width' (Get-BarBounds $screenArea 'left').Width 164
 Check 'right dock aligns with screen edge' (Get-BarBounds $screenArea 'right').Right $screenArea.Right
 foreach ($case in @(
     @(-1000, -100, 'top'), @(-1000, 940, 'bottom'),
@@ -279,10 +324,8 @@ foreach ($case in @(
     Check "nearest edge $($case[2])" (Get-NearestBarEdge $point $screenArea) $case[2]
 }
 $script:Scale = 2.0
-Check 'dock scales height for high DPI' (Get-BarBounds $screenArea 'bottom').Height 104
-Check 'dock scales vertical width for high DPI' (Get-BarBounds $screenArea 'right').Width 256
-Check 'warning bar is wider than normal' ((Get-BarBounds $screenArea 'bottom' $true).Width -gt (Get-BarBounds $screenArea 'bottom' $false).Width) $true
-Check 'warning side bar is wider than normal' ((Get-BarBounds $screenArea 'left' $true).Width -gt (Get-BarBounds $screenArea 'left' $false).Width) $true
+Check 'dock scales height for high DPI' (Get-BarBounds $screenArea 'bottom').Height 116
+Check 'dock scales vertical width for high DPI' (Get-BarBounds $screenArea 'right').Width 328
 $script:Scale = 1.0
 
 New-Meeting 3
@@ -314,8 +357,6 @@ Toggle-Run
 Check 'accepted overtime locks zero allocation' $script:People[0].Budget 0
 Check 'zero allocation is marked started' $script:People[0].Started $true
 Step 10
-Check-Alerts
-Check 'zero-budget start emits one overtime alarm' ($script:Sounds -join ',') 'Hand'
 $script:ConfirmResult = $false
 Go-Next
 Check 'declining expired next preserves speaker' $script:Idx 0
@@ -334,15 +375,6 @@ $script:ConfirmResult = $false
 Reset-Current
 Check 'cancelled reset preserves elapsed' (Get-Elapsed 0) 15
 Check 'cancelled reset preserves running clock' $script:Sw.IsRunning $true
-
-New-Meeting 6
-Toggle-Run
-Step 550
-Check-Alerts
-Check 'delayed tick emits only the critical warning' ($script:Sounds -join ',') 'Exclamation'
-Step 51
-Check-Alerts
-Check 'delayed overtime emits one new alarm' ($script:Sounds -join ',') 'Exclamation,Hand'
 
 Write-Host ("{0} passed, {1} failed" -f $script:Passes, $script:Fails)
 exit $script:Fails
