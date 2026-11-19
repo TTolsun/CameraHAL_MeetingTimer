@@ -49,7 +49,6 @@ function Fresh {
     $script:Undo = $null
     Start-Over
     $script:End = (Get-Date).AddMinutes(40)
-    $script:Sound = $false
 }
 function Invoke-TestDialog($dialog) {
     $dialog.Show()
@@ -59,9 +58,9 @@ function Invoke-TestDialog($dialog) {
         switch ($script:DialogCase) {
             'Unrelated' {
                 Assert ($dialog.Controls['SpeakerCount'].Value -eq 6) 'Opening past-deadline settings must preserve speaker count'
-                foreach ($control in $dialog.Controls) {
-                    if ($control -is [Windows.Forms.CheckBox] -and $control.Text.StartsWith('알림음')) { $control.Checked = -not $control.Checked }
-                }
+                $alwaysOnTop = @($dialog.Controls | Where-Object { $_ -is [Windows.Forms.CheckBox] })
+                Assert ($alwaysOnTop.Count -eq 1 -and $alwaysOnTop[0].Text -notmatch '알림음') 'Settings offer only the existing always-on-top checkbox'
+                $alwaysOnTop[0].Checked = -not $alwaysOnTop[0].Checked
                 [TimerTestInput]::DialogKey($dialog, [Windows.Forms.Keys]::Enter)
                 Assert ($dialog.DialogResult -eq 'OK') 'Enter must save settings'
             }
@@ -132,6 +131,16 @@ try {
     $workingArea = [Windows.Forms.Screen]::FromControl($form).WorkingArea
     Assert ($script:BarEdge -eq 'bottom' -and $form.Bottom -eq $workingArea.Bottom) 'Default bar docks above the taskbar at the bottom'
     Assert $form.TopMost 'Presenter mode remains on top'
+    $narrowArea = New-Object Drawing.Rectangle(0, 0, (S 400), (S 600))
+    $form.Bounds = Get-BarBounds $narrowArea 'bottom'
+    Layout-BarControls
+    Assert ($form.Height -eq (S 88)) 'A narrow horizontal bar reserves a second row'
+    foreach ($button in $barButtons) {
+        Assert ($button.Top -ge (S 42) -and $stage.ClientRectangle.Contains($button.Bounds)) 'Narrow bar buttons stay below the clock and within the window'
+    }
+    if ($RenderDirectory) { Save-MainRender 'narrow-horizontal' }
+    $form.Bounds = Get-BarBounds $workingArea 'bottom'
+    Layout-BarControls
     foreach ($button in $barButtons) { Assert (-not [string]::IsNullOrEmpty($button.Glyph)) 'Presenter actions have icons and retain native text for accessibility' }
     $centerX = [int](($workingArea.Left + $workingArea.Right) / 2)
     $centerY = [int](($workingArea.Top + $workingArea.Bottom) / 2)
@@ -172,8 +181,10 @@ try {
     Assert ($script:Sw.IsRunning -and $btnBarRun.Text -eq '일시정지') 'Presenter Continue resumes the clock'
     [TimerTestInput]::Click($btnBarNext)
     Assert ($script:Idx -eq 1) 'Presenter next button switches speakers'
+    Assert ($null -ne $script:BatonStarted) 'Presenter Next starts one camera movement'
     [TimerTestInput]::Click($btnBarUndo)
     Assert ($script:Idx -eq 0) 'Presenter undo button restores the speaker'
+    Assert ($null -eq $script:BatonStarted) 'Presenter Undo places the camera without replaying movement'
     [TimerTestInput]::Click($btnBarBack)
     Assert (-not $script:BarMode -and $form.Bounds -eq $normalBounds) 'Back button restores the normal window bounds'
     Assert ($form.TopMost -eq $topMost) 'Back button restores always-on-top preference'
@@ -207,6 +218,18 @@ try {
     foreach ($theme in @('light','dark')) {
         Set-Theme $theme
         Fresh
+        $script:People[0].Started = $true
+        $script:People[0].Budget = 180
+        $script:People[0].Used = 120
+        $script:Sw.Restart()
+        Save-Undo 'next'
+        Assert ((Get-Phase).Closing -and (Test-UndoHint)) 'The one-minute cue applies even while the undo hint is available'
+        if ($RenderDirectory) { Save-MainRender ($theme + '-one-minute') }
+        $script:BarEdge = 'bottom'
+        Set-BarMode $true
+        if ($RenderDirectory) { Save-MainRender ($theme + '-bar-one-minute') }
+        Set-BarMode $false
+        Fresh
         foreach ($phase in @('normal','notice','critical','over')) {
             $script:People[0].Started = $true
             $script:People[0].Budget = 100
@@ -214,8 +237,8 @@ try {
             $script:Sw.Restart()
             $state = Get-Phase
             Assert ($state.Level -eq $phase) 'Rendered phase must match remaining percentage'
-            $color = Get-ProgressColor $state
-            Assert (-not $color.IsEmpty) 'Every progress phase has a color in both themes'
+            $color = Get-ClockColor $state
+            Assert (-not $color.IsEmpty) 'Every clock phase has a color in both themes'
             if ($RenderDirectory) { Save-MainRender ($theme + '-' + $phase) }
             $script:Sw.Stop()
         }
@@ -242,22 +265,38 @@ try {
         $script:People[0].Used = 70
         $script:Sw.Restart()
         Refresh-All
-        Assert ($form.Width -gt $compactWidth) 'Warning automatically widens a compact bar'
+        Assert ($form.Width -eq $compactWidth) 'Quiet time guidance preserves the presenter bar width'
         if ($RenderDirectory) { Save-MainRender ($theme + '-bar-notice') }
-        Set-BarMode $false
         $script:Sw.Stop()
-        $critical = [pscustomobject]@{ Level = 'critical'; Run = 'run'; El = 90.0 }
-        $first = Get-ProgressColor $critical
-        $critical.El = 90.5
-        Assert ((Get-ProgressColor $critical).ToArgb() -ne $first.ToArgb()) 'Critical progress must pulse while running'
-        $critical.El = 90.0
-        $first = Get-ProgressColor $critical $true
-        $critical.El = 90.5
-        Assert ((Get-ProgressColor $critical $true).ToArgb() -ne $first.ToArgb()) 'Presenter progress must also pulse in both themes'
-        $critical.Run = 'pause'
-        $first = Get-ProgressColor $critical
-        $critical.El = 91.0
-        Assert ((Get-ProgressColor $critical).ToArgb() -eq $first.ToArgb()) 'Paused progress must stop pulsing'
+        Set-Count 50
+        $script:Idx = 11
+        Refresh-All
+        Assert ($form.Width -eq $compactWidth) 'Fifty speakers do not change the presenter bar width'
+        Assert ($null -eq $script:BatonStarted) 'Pause and speaker count changes do not start movement'
+        $script:People[11].Started = $true
+        $script:People[11].Budget = 100
+        $script:People[11].Used = 114
+        $quiet = Get-Phase
+        Assert ((Get-ClockColor $quiet) -eq $C.Ink -and (Get-ClockColor $quiet $true) -eq $C.StripInk) 'Early overtime digits retain the regular color in both layouts'
+        $script:People[11].Used = 115
+        $highlighted = Get-Phase
+        Assert ((Get-ClockColor $highlighted) -eq $C.Overtime -and (Get-ClockColor $highlighted $true) -eq $C.BarOvertime) 'Overtime digits use the quiet highlight from fifteen seconds'
+        if ($RenderDirectory) { Save-MainRender ($theme + '-bar-crowded-over') }
+        Set-Count 20
+        $script:Sw.Restart()
+        Assert ((Get-BarMessage (Get-Phase)) -eq '') 'Running overtime uses the clock alone in presenter mode'
+        if ($RenderDirectory) { Save-MainRender ($theme + '-bar-speaker-12-of-20') }
+        $script:Sw.Stop()
+        Set-Count 50
+        $script:People[11].Used = 115.5
+        Assert ((Get-ClockColor (Get-Phase)) -eq (Get-ClockColor $highlighted)) 'Overtime highlight is stable'
+        $script:BarEdge = 'right'
+        $form.Bounds = Get-BarBounds $workingArea
+        Layout-BarControls
+        if ($RenderDirectory) { Save-MainRender ($theme + '-vertical-crowded-over') }
+        Set-BarMode $false
+        Assert ($null -eq $script:BatonStarted) 'Redocking, theme changes and returning to the main window do not start movement'
+        if ($RenderDirectory) { Save-MainRender ($theme + '-crowded-over') }
     }
     Set-Theme 'light'
     $form.MinimumSize = [Drawing.Size]::Empty
