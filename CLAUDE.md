@@ -4,19 +4,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A single-window speaker timer for the CameraHAL weekly meeting. It is one PowerShell script (`CameraHAL_MeetingTimer.ps1`, WinForms) plus a `.bat` launcher. Target runtime is **Windows PowerShell 5.1** as shipped with Windows 10/11; nothing may require installing anything (no PowerShell 7 syntax such as `??`, `?.`, ternary, `&&`).
+A single-window speaker timer for weekly meetings. The Windows app in `windows/` contains its WinForms entry point, time model, and BAT launcher. The Chrome extension lives in `chrome-extension/` and loads its own time model before the UI. Target runtime is **Windows PowerShell 5.1** as shipped with Windows 10/11; nothing may require installing anything (no PowerShell 7 syntax such as `??`, `?.`, ternary, `&&`).
 
 The user-facing README is in Korean. Code comments and commit messages are in English.
 
 ## Commands
 
-There is no build or lint step.
+The runtime sources require no compilation.
 
 - Test the time model (no Pester, nothing to install; exit code = number of failures):
   ```
   powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\TimeModel.Tests.ps1
   ```
-  It lifts every top-level function out of the script with the PowerShell parser (the window is never built), shadows `Get-Date` with a fake clock and swaps `$script:Sw` for a stopwatch double. So keep time logic in top-level functions, read the clock only through argument-less `Get-Date` and `$script:Sw`, and add a scenario there whenever the sharing rules change.
+  It loads `windows/TimeModel.ps1` and lifts the top-level functions from the entry point with the PowerShell parser (the window is never built), shadows `Get-Date` with a fake clock and swaps `$script:Sw` for a stopwatch double. So keep time logic in top-level functions, read the clock only through argument-less `Get-Date` and `$script:Sw`, and add a scenario there whenever the sharing rules change.
 
 - Test native buttons, key events, settings and presenter bar placement:
   ```
@@ -24,18 +24,18 @@ There is no build or lint step.
   ```
   Optional `-RenderDirectory <path>` writes preview PNGs. The test uses an isolated temporary configuration and injects native control events. Live desktop pointer gestures require a separate manual check.
 
-- Run: double-click `CameraHAL_MeetingTimer.bat`, or from a shell:
+- Run: double-click `windows/MeetingTimer.bat`, or from a shell:
   ```
-  powershell.exe -NoProfile -STA -ExecutionPolicy RemoteSigned -File .\CameraHAL_MeetingTimer.ps1
+  powershell.exe -NoProfile -STA -ExecutionPolicy RemoteSigned -File .\windows\MeetingTimer.ps1
   ```
   `-STA` is required: WinForms needs a single-threaded apartment.
 - Syntax check without launching the UI:
   ```
-  $e=$null; [void][System.Management.Automation.Language.Parser]::ParseFile("$PWD\CameraHAL_MeetingTimer.ps1",[ref]$null,[ref]$e); $e
+  $e=$null; [void][System.Management.Automation.Language.Parser]::ParseFile("$PWD\windows\MeetingTimer.ps1",[ref]$null,[ref]$e); $e
   ```
-- Release zips come from `git archive`; `.gitattributes` marks repo housekeeping files and this file `export-ignore`, so the zip holds only the `.bat`, the `.ps1` and the README.
+- Run `scripts/Build-Release.ps1` to package the BAT and PowerShell script together and the unpacked `chrome-extension/` separately. A version tag prepares a draft release with both tested ZIPs.
 
-## Architecture (CameraHAL_MeetingTimer.ps1)
+## Architecture (MeetingTimer.ps1)
 
 The script runs top to bottom and ends in `$form.ShowDialog()`. Sections are marked with `# ---------------- name ----------------` comments.
 
@@ -48,7 +48,7 @@ The script runs top to bottom and ends in `$form.ShowDialog()`. Sections are mar
    - `Lock-Budget` fixes the current speaker's budget the moment they start. New starts after the deadline require confirmation and lock zero seconds, recording overtime without inventing extra time. `Started` distinguishes that locked zero from an unlocked share. The first call also records `Plan`, which the strip compares each share against. Saving a changed end time or count starts a fresh meeting with an unlocked plan.
    - `Test-Overbooked` is true when `MinShare` for everyone still to come no longer fits before the end time; the strip then shows `종료 시각 초과 예상`.
    - `Get-Phase` derives the remaining time, display state and whether the overtime digits have reached the 15-second highlight threshold. Both layouts show factual remaining-time text once 30% of the locked budget or one minute remains and keep time indicators steady.
-5. **Render loop**: a `Windows.Forms.Timer` calls `Refresh-All` at 200 ms intervals. Next temporarily increases the refresh rate to animate the camera marker for 240 ms. `Get-SpeakerWindow` lays out up to five consecutive speaker numbers. The camera and current-number badge use theme colors. It refreshes the strip, timer, button states and title. The two-row bottom band contains native start, next, undo, settings, presenter entry and theme buttons. All support Tab and Enter. The main next button is hidden while paused. Presenter next is disabled while paused to keep its controls in a stable position.
+5. **Render loop**: a `Windows.Forms.Timer` calls `Refresh-All` at 200 ms intervals to refresh the strip, timer, button states and title. `Get-SpeakerWindow` lays out up to five consecutive numbers in the bar and `Paint-BarSpeakers` highlights the current speaker. The two-row bottom band contains native start, next, undo, settings, presenter entry and theme buttons. All support Tab and Enter. The main next button is hidden while paused. Presenter next is disabled while paused to keep its controls in a stable position.
 6. **Settings**: `Show-Settings` builds a light modal form with native controls. Its time-only picker uses `Resolve-EndTime` to preserve an unchanged deadline, including a past one. Edited past times mean tomorrow, with a visible label. Draft edits preserve the live meeting. A changed count or deadline must fit the one-minute minimum for every speaker in the new meeting. Saving a valid change resets the timer and all speaker records, while a preference-only save preserves the session. Enter saves and Escape cancels. Finishing the last speaker returns directly to a fresh meeting.
 7. **Undo** (button or Ctrl+Z): `Go-Next` and `Reset-Current` call `Save-Undo` first (a copy of `People`, `Idx`, `End`, `Plan`, and clock state). `Undo-Last` restores it and assigns time since the snapshot to the original speaker if running. One level, including a reset on speaker 1. Count/end-time changes clear it. Unrelated preference changes preserve it. Reset requires confirmation.
 8. **Default end** (`Get-NextHour`): the next full hour, or the one after when it is less than 10 minutes away.

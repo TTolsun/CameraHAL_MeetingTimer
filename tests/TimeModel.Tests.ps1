@@ -4,13 +4,15 @@
 #   powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\TimeModel.Tests.ps1
 # Exit code is the number of failed checks.
 #
-# How it works: the functions are lifted out of CameraHAL_MeetingTimer.ps1 through the
+# How it works: the functions are lifted out of MeetingTimer.ps1 through the
 # PowerShell parser, so the window is never built. The clock is faked: a function named
 # Get-Date shadows the cmdlet (functions win over cmdlets), and $script:Sw is a stopwatch
 # double driven by the same fake time. A one-hour meeting runs in well under a second.
 
 $ErrorActionPreference = 'Stop'
-$target = Join-Path (Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)) 'CameraHAL_MeetingTimer.ps1'
+$windows = Join-Path (Split-Path -Parent $PSScriptRoot) 'windows'
+. (Join-Path $windows 'TimeModel.ps1')
+$target = Join-Path $windows 'MeetingTimer.ps1'
 
 $parseErrors = $null
 $ast = [System.Management.Automation.Language.Parser]::ParseFile($target, [ref]$null, [ref]$parseErrors)
@@ -165,23 +167,6 @@ foreach ($case in @(
     if ($window.After) { $labels += '…' }
     Check "speaker window for index $($case[1]) of $($case[0])" ($labels -join ' ') $case[2]
 }
-New-Meeting 3
-Toggle-Run
-Check 'starting the first clock leaves the camera in place' (Get-BatonOffset) 0
-Go-Next
-Check 'early Next starts the camera at the prior slot' (Get-BatonOffset) -1
-Step 0.12
-Check 'camera moves toward its destination' (Get-BatonOffset) -0.25
-Toggle-Run
-Check 'pause does not restart the camera' (Get-BatonOffset) -0.25
-Step 0.12
-Check 'camera settles after a single movement' (Get-BatonOffset) 0
-Undo-Last
-Check 'undo restores the camera immediately' (Get-BatonOffset) 0
-Step 1300
-Go-Next
-Check 'Next after overtime animates the same camera movement' (Get-BatonOffset) -1
-
 # Short shares use the same percentage boundaries.
 New-Meeting 6 '14:57:00' '15:00:00'
 Toggle-Run
