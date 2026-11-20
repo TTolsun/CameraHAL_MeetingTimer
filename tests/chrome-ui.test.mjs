@@ -99,7 +99,8 @@ test('presenter bar replaces the visible popup and restores the same meeting', {
     })()`);
     assert.equal(hit, true, action + ' must be reachable in the bar: ' + JSON.stringify(hit));
   }
-  assert.ok(await run('document.documentElement.scrollHeight <= innerHeight'));
+  const viewport = await run('({height: innerHeight, content: document.documentElement.scrollHeight})');
+  assert.ok(viewport.content <= viewport.height, 'Default timer must fit: ' + JSON.stringify(viewport));
   await click('#dark');
   await click('#light');
   assert.equal(await run("document.documentElement.dataset.theme"), 'light');
