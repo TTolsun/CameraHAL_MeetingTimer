@@ -292,15 +292,6 @@ Check 'expired deadline gives a reason' ((Get-ScheduleIssue 1 (Get-Date)) -match
 Check 'fewer than sixty seconds cannot support one speaker' ([bool](Get-ScheduleIssue 1 (Get-Date).AddSeconds(59))) $true
 Check 'app speaker limit has its own explanation' ((Get-ScheduleIssue 51 (Get-Date).AddHours(3)) -match '최대 50명') $true
 
-# ---------------- presenter bar ----------------
-Add-Type -AssemblyName System.Drawing
-$script:Scale = 1.0
-$script:BarH = 58
-$script:BarEdge = 'bottom'
-$bar = Get-BarBounds (New-Object Drawing.Rectangle(1920, 0, 1920, 1040))
-Check 'compact bar is centered along the bottom' ("{0},{1},{2}" -f $bar.X, $bar.Y, $bar.Width) '2555,982,650'
-Check 'bar height' $bar.Height 58
-
 # ---------------- config (untrusted input) ----------------
 $script:ConfigFile = Join-Path ([IO.Path]::GetTempPath()) ('mt-test-{0}.json' -f [guid]::NewGuid())
 function Load-From([string]$json) {
@@ -311,34 +302,15 @@ Check 'Bar defaults to off' (Load-From '{}').Bar $false
 Check 'Bar true is read' (Load-From '{"Bar": true}').Bar $true
 Check 'Bar as a string is rejected' (Load-From '{"Bar": "yes"}').Bar $false
 Check 'Bar as a number is rejected' (Load-From '{"Bar": 1}').Bar $false
-Check 'old configs default to bottom docking' (Load-From '{}').BarEdge 'bottom'
-Check 'left docking is accepted' (Load-From '{"BarEdge": "left"}').BarEdge 'left'
-Check 'invalid docking is rejected' (Load-From '{"BarEdge": "diagonal"}').BarEdge 'bottom'
-Check 'docking boolean is rejected' (Load-From '{"BarEdge": true}').BarEdge 'bottom'
-Check 'docking value is case-sensitive' (Load-From '{"BarEdge": "TOP"}').BarEdge 'bottom'
+$legacyBar = Load-From '{"Bar": true, "BarEdge": "left", "TopMost": false}'
+Check 'legacy edge does not prevent restoring bar mode' $legacyBar.Bar $true
+Check 'legacy edge does not change the normal window preference' $legacyBar.TopMost $false
+Check 'legacy edge is ignored' $legacyBar.PSObject.Properties['BarEdge'] $null
 Check 'a JSON array falls back to defaults' (Load-From '[1,2,3]').Count 6
 Check 'unknown theme falls back' (Load-From '{"Theme": "Dark"}').Theme 'light'
 Remove-Item -LiteralPath $script:ConfigFile -ErrorAction SilentlyContinue
 
 # ---------------- integrated regression scenarios ----------------
-$screenArea = New-Object Drawing.Rectangle(-1920, -100, 1920, 1040)
-foreach ($edge in @('top','bottom','left','right')) {
-    $bounds = Get-BarBounds $screenArea $edge
-    Check "$edge dock stays within monitor" ($screenArea.Contains($bounds)) $true
-}
-Check 'left dock width' (Get-BarBounds $screenArea 'left').Width 164
-Check 'right dock aligns with screen edge' (Get-BarBounds $screenArea 'right').Right $screenArea.Right
-foreach ($case in @(
-    @(-1000, -100, 'top'), @(-1000, 940, 'bottom'),
-    @(-1920, 400, 'left'), @(0, 400, 'right'))) {
-    $point = New-Object Drawing.Point($case[0], $case[1])
-    Check "nearest edge $($case[2])" (Get-NearestBarEdge $point $screenArea) $case[2]
-}
-$script:Scale = 2.0
-Check 'dock scales height for high DPI' (Get-BarBounds $screenArea 'bottom').Height 116
-Check 'dock scales vertical width for high DPI' (Get-BarBounds $screenArea 'right').Width 328
-$script:Scale = 1.0
-
 New-Meeting 3
 $original = [datetime]'2026-01-05 13:00:00'
 Check 'unmodified past end remains unchanged' (Resolve-EndTime $original $original) $original
