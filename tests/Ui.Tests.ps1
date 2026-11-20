@@ -185,51 +185,53 @@ try {
     }
     Assert ($btnBar.Text -eq '발표 막대' -and $btnBarBack.Text -eq '기본 창') 'Mode controls need explicit labels'
     Assert ($btnBar.Glyph -eq 'presenter-bar') 'Presenter entry is rendered as an icon'
+    $initialBounds = $form.Bounds
+    $initialTopMost = $script:TopMostPref
+    $script:TopMostPref = $false
+    $form.TopMost = $false
+    $form.Width = $form.MinimumSize.Width
+    Place-Corner
+    $workingArea = [Windows.Forms.Screen]::FromControl($form).WorkingArea
+    # Initialize the paint handlers before exposing the window to synchronous native messages.
+    foreach ($panel in @($strip, $stage, $band)) { [TimerTestInput]::Paint($panel) }
+    $form.Show()
     $normalBounds = $form.Bounds
-    $topMost = $script:TopMostPref
     [TimerTestInput]::Click($btnBar)
     Assert $script:BarMode 'Bar button enters presenter mode'
-    $workingArea = [Windows.Forms.Screen]::FromControl($form).WorkingArea
-    Assert ($script:BarEdge -eq 'bottom' -and $form.Bottom -eq $workingArea.Bottom) 'Default bar docks above the taskbar at the bottom'
-    Assert $form.TopMost 'Presenter mode remains on top'
-    $narrowArea = New-Object Drawing.Rectangle(0, 0, (S 400), (S 600))
-    $form.Bounds = Get-BarBounds $narrowArea 'bottom'
-    Layout-BarControls
+    Assert ($form.Location -eq $normalBounds.Location -and $form.Width -eq $normalBounds.Width) 'Bar entry keeps the normal location and minimum width at a screen edge'
+    Assert ($form.Height -lt $normalBounds.Height -and $form.Width -gt $form.Height) 'Bar entry reduces the height and remains horizontal'
+    Assert ($form.TopMost -and -not (Load-Config).TopMost) 'Presenter mode stays on top without saving it as the normal preference'
     Assert ($form.Height -eq (S 88)) 'A narrow horizontal bar reserves a second row'
     foreach ($button in $barButtons) {
-        Assert ($button.Top -ge (S 42) -and $stage.ClientRectangle.Contains($button.Bounds)) 'Narrow bar buttons stay below the clock and within the window'
+        Assert ($button.Top -ge (S 42) -and $stage.ClientRectangle.Contains($button.Bounds)) 'Minimum-width bar buttons stay below the clock and within the window'
+        Assert (-not [string]::IsNullOrEmpty($button.Glyph)) 'Presenter actions have icons and retain native text for accessibility'
     }
+    [TimerTestInput]::Paint($stage)
     if ($RenderDirectory) { Save-MainRender 'narrow-horizontal' }
-    $form.Bounds = Get-BarBounds $workingArea 'bottom'
-    Layout-BarControls
-    foreach ($button in $barButtons) { Assert (-not [string]::IsNullOrEmpty($button.Glyph)) 'Presenter actions have icons and retain native text for accessibility' }
-    $centerX = [int](($workingArea.Left + $workingArea.Right) / 2)
-    $centerY = [int](($workingArea.Top + $workingArea.Bottom) / 2)
+    $centerX = [int](($workingArea.Left + $workingArea.Right - $form.Width) / 2)
+    $centerY = [int](($workingArea.Top + $workingArea.Bottom - $form.Height) / 2)
     $originalBounds = $form.Bounds
     $script:TestCursorPosition = New-Object Drawing.Point(($form.Left + (S 20)), ($form.Top + (S 20)))
     [TimerTestInput]::Mouse($stage, 'Down')
     [TimerTestInput]::Mouse($stage, 'Move')
     [TimerTestInput]::Mouse($stage, 'Up')
-    Assert ($null -eq $script:BarDrag -and $form.Bounds -eq $originalBounds) 'Clicking empty bar space leaves docking unchanged'
+    Assert ($null -eq $script:BarDrag -and $form.Bounds -eq $originalBounds) 'Clicking the bar leaves it in place'
     foreach ($drop in @(
+        @($centerX, $centerY, 'center'),
         @($centerX, $workingArea.Top, 'top'),
         @($workingArea.Left, $centerY, 'left'),
-        @(($workingArea.Right - 1), $centerY, 'right'),
-        @($centerX, ($workingArea.Bottom - 1), 'bottom'))) {
-        $start = New-Object Drawing.Point(($form.Left + (S 20)), ($form.Top + (S 20)))
-        $origin = $form.Location
-        $script:TestCursorPosition = $start
+        @(($workingArea.Right - $form.Width), $centerY, 'right'),
+        @($centerX, ($workingArea.Bottom - $form.Height), 'bottom'))) {
+        $script:TestCursorPosition = New-Object Drawing.Point(($form.Left + (S 20)), ($form.Top + (S 20)))
         [TimerTestInput]::Mouse($stage, 'Down')
         Assert ($null -ne $script:BarDrag -and -not $script:BarDrag.Moving) 'Mouse down records the drag origin'
-        $script:TestCursorPosition = New-Object Drawing.Point($drop[0], $drop[1])
+        $script:TestCursorPosition = New-Object Drawing.Point(($drop[0] + (S 20)), ($drop[1] + (S 20)))
+        $expectedBounds = New-Object Drawing.Rectangle($drop[0], $drop[1], $originalBounds.Width, $originalBounds.Height)
         [TimerTestInput]::Mouse($stage, 'Move')
-        $expectedMove = New-Object Drawing.Point(($origin.X + $drop[0] - $start.X), ($origin.Y + $drop[1] - $start.Y))
-        Assert ($script:BarDrag.Moving -and $form.Location -eq $expectedMove) 'Bar follows the simulated pointer during drag'
+        Assert ($script:BarDrag.Moving -and $form.Bounds -eq $expectedBounds) 'Bar follows the simulated pointer during drag'
         [TimerTestInput]::Mouse($stage, 'Up')
         Assert ($null -eq $script:BarDrag -and -not $stage.Capture) 'Mouse up clears drag state and capture'
-        Assert ($script:BarEdge -eq $drop[2]) "Drag docks to the $($drop[2]) edge"
-        Assert ($form.Bounds -eq (Get-BarBounds $workingArea $drop[2])) "Drag positions the bar at the $($drop[2]) edge"
-        Assert ((Load-Config).BarEdge -eq $drop[2]) "Drag persists the $($drop[2]) edge"
+        Assert ($form.Bounds -eq $expectedBounds -and $form.TopMost) "Bar stays horizontal and on top after dropping at the $($drop[2])"
     }
     [TimerTestInput]::Click($btnBarRun)
     Assert $script:Sw.IsRunning 'Presenter start button runs the clock'
@@ -248,7 +250,10 @@ try {
     Assert ($null -eq $script:BatonStarted) 'Presenter Undo places the camera without replaying movement'
     [TimerTestInput]::Click($btnBarBack)
     Assert (-not $script:BarMode -and $form.Bounds -eq $normalBounds) 'Back button restores the normal window bounds'
-    Assert ($form.TopMost -eq $topMost) 'Back button restores always-on-top preference'
+    Assert (-not $form.TopMost) 'Back button restores the disabled always-on-top preference'
+    $script:TopMostPref = $initialTopMost
+    $form.TopMost = $initialTopMost
+    $form.Bounds = $initialBounds
     [void][TimerTestInput]::Key($form, [Windows.Forms.Keys]::B)
     [void][TimerTestInput]::Key($form, [Windows.Forms.Keys]::Escape)
     Assert (-not $script:BarMode) 'B and Escape preserve mode shortcuts'
@@ -260,9 +265,6 @@ try {
     $key = [TimerTestInput]::Key($form, [Windows.Forms.Keys]'Control, Z')
     Assert ($script:Idx -eq 0 -and $key.SuppressKeyPress) 'Ctrl+Z restores the last action'
 
-    # Initialize the paint handlers before exposing the window to synchronous native messages.
-    foreach ($panel in @($strip, $stage, $band)) { [TimerTestInput]::Paint($panel) }
-    $form.Show()
     foreach ($usePresenterBar in @($false, $true)) {
         Fresh 2
         Set-BarMode $usePresenterBar
@@ -349,7 +351,6 @@ try {
         Save-Undo 'next'
         Assert ((Get-Phase).Closing -and (Test-UndoHint)) 'The one-minute cue applies even while the undo hint is available'
         if ($RenderDirectory) { Save-MainRender ($theme + '-one-minute') }
-        $script:BarEdge = 'bottom'
         Set-BarMode $true
         if ($RenderDirectory) { Save-MainRender ($theme + '-bar-one-minute') }
         Set-BarMode $false
@@ -366,18 +367,20 @@ try {
             if ($RenderDirectory) { Save-MainRender ($theme + '-' + $phase) }
             $script:Sw.Stop()
         }
-        foreach ($edge in @('bottom','top','left','right')) {
-            $script:BarEdge = $edge
-            Set-BarMode $true
-            $workingArea = [Windows.Forms.Screen]::FromControl($form).WorkingArea
-            $form.Bounds = Get-BarBounds $workingArea $edge
-            Layout-BarControls
-            foreach ($button in $barButtons) { Assert ($stage.ClientRectangle.Contains($button.Bounds)) 'Presenter controls fit every dock orientation' }
-            if ($RenderDirectory) { Save-MainRender ($theme + '-bar-' + $edge) }
-            Set-BarMode $false
+        $compactBounds = $form.Bounds
+        $form.SetBounds($centerX, $centerY, (S 600), $compactBounds.Height)
+        $wideBounds = $form.Bounds
+        Set-BarMode $true
+        Assert ($form.Location -eq $wideBounds.Location -and $form.Width -eq $wideBounds.Width) 'Wide bar starts at the normal location and retains its width'
+        Assert ($form.Height -eq (S 58)) 'Wide bar fits on one row'
+        foreach ($button in $barButtons) {
+            Assert ($stage.ClientRectangle.Contains($button.Bounds)) 'Presenter controls fit the wide layout'
         }
+        [TimerTestInput]::Paint($stage)
+        if ($RenderDirectory) { Save-MainRender ($theme + '-bar-wide') }
+        Set-BarMode $false
+        $form.Bounds = $compactBounds
         Fresh
-        $script:BarEdge = 'bottom'
         Set-BarMode $true
         $compactWidth = $form.Width
         if ($RenderDirectory) { Save-MainRender ($theme + '-bar-compact') }
@@ -415,12 +418,8 @@ try {
         $script:People = $crowdedPeople
         $script:People[11].Used = 115.5
         Assert ((Get-ClockColor (Get-Phase)) -eq (Get-ClockColor $highlighted)) 'Overtime highlight is stable'
-        $script:BarEdge = 'right'
-        $form.Bounds = Get-BarBounds $workingArea
-        Layout-BarControls
-        if ($RenderDirectory) { Save-MainRender ($theme + '-vertical-crowded-over') }
         Set-BarMode $false
-        Assert ($null -eq $script:BatonStarted) 'Redocking, theme changes and returning to the main window do not start movement'
+        Assert ($null -eq $script:BatonStarted) 'Theme changes and returning to the main window do not start movement'
         if ($RenderDirectory) { Save-MainRender ($theme + '-crowded-over') }
     }
     Set-Theme 'light'

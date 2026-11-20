@@ -246,7 +246,7 @@ function FN([double]$px)  { Font-Px $famNum ($px * $script:Scale) $numStyle }
 
 # ---------------- config ----------------
 function Load-Config {
-    $cfg = [pscustomobject]@{ Count = 6; TopMost = $true; Theme = 'light'; Bar = $false; BarEdge = 'bottom' }
+    $cfg = [pscustomobject]@{ Count = 6; TopMost = $true; Theme = 'light'; Bar = $false }
     # config.json is treated as untrusted data: plain JSON only (no object
     # deserialization), size-capped, and every field type- and range-checked.
     # Anything unexpected falls back to the defaults above.
@@ -263,7 +263,6 @@ function Load-Config {
         if ($raw -and $raw.Value -is [int] -and [int]::TryParse("$($raw.Value)", [ref]$n) -and $n -ge 1 -and $n -le 50) { $cfg.Count = $n }
         if ($j.TopMost -is [bool]) { $cfg.TopMost = $j.TopMost }
         if ($j.Bar -is [bool]) { $cfg.Bar = $j.Bar }
-        if ($j.BarEdge -is [string] -and @('top','bottom','left','right') -ccontains $j.BarEdge) { $cfg.BarEdge = $j.BarEdge }
         # Only the two known theme names are accepted; anything else keeps the default.
         if ($j.Theme -is [string] -and ($j.Theme -ceq 'light' -or $j.Theme -ceq 'dark')) { $cfg.Theme = $j.Theme }
     } catch { }
@@ -278,7 +277,6 @@ function Save-Config {
         # The preference, not $form.TopMost: the presenter bar forces always-on-top.
         TopMost  = [bool]$script:TopMostPref
         Bar      = [bool]$script:BarMode
-        BarEdge  = [string]$script:BarEdge
         Theme    = [string]$script:ThemeName
     } | ConvertTo-Json
     [IO.File]::WriteAllText($script:ConfigFile, $json, (New-Object Text.UTF8Encoding $false))
@@ -666,21 +664,11 @@ function Paint-Bar($g) {
     if ($W -lt 50 -or $H -lt 10 -or $script:People.Count -eq 0) { return }
     $st = Get-Phase
     $g.Clear($C.Strip)
-    $vertical = $script:BarEdge -in @('left','right')
     $dc = Get-ClockColor $st $true
     $msg = Get-BarMessage $st
     $head = '{0} / {1}명' -f ($script:Idx + 1), $script:People.Count
-    if ($vertical) {
-        $pad = S 10
-        $content = $W - 2 * $pad
-        Draw-Text $g $head (FKM 15) $C.StripInk $pad (S 14) $content (S 28) 'Center'
-        Paint-SpeakerBaton $g $pad (S 52) $content $true
-        $digitPx = [math]::Min((S 43), $W / 4)
-        while ((Measure-W $st.Text (Font-Px $famNum $digitPx $numStyle)) -gt $content -and $digitPx -gt (S 16)) { $digitPx -= 1 }
-        Draw-Text $g $st.Text (Font-Px $famNum $digitPx $numStyle) $dc $pad (S 94) $content (S 66) 'Center'
-        Draw-Text $g $msg (FKM 12) $C.StripMute $pad (S 162) $content (S 28) 'Center'
-    } elseif ($W -lt (S $script:BarTwoRowWidth)) {
-        # On a narrow monitor the clock and camera share the top row; controls stay below.
+    if ($W -lt (S $script:BarTwoRowWidth)) {
+        # In a narrow window the clock and camera share the top row; controls stay below.
         $pad = S 8
         $batonW = S 140
         $clockX = $pad + $batonW
@@ -722,13 +710,8 @@ function Paint-Bar($g) {
     }
     $th = S 4
     $ratio = if ($st.Budget -gt 0) { [math]::Min(1.0, $st.El / $st.Budget) } elseif ($st.Level -eq 'over') { 1.0 } else { 0 }
-    if ($vertical) {
-        Fill-Round $g $C.BarTrack ($W - $th) 0 $th $H 0
-        Fill-Round $g $C.StripMute ($W - $th) 0 $th ($H * $ratio) 0
-    } else {
-        Fill-Round $g $C.BarTrack 0 ($H - $th) $W $th 0
-        Fill-Round $g $C.StripMute 0 ($H - $th) ($W * $ratio) $th 0
-    }
+    Fill-Round $g $C.BarTrack 0 ($H - $th) $W $th 0
+    Fill-Round $g $C.StripMute 0 ($H - $th) ($W * $ratio) $th 0
 }
 
 function Get-StageClockFont([string]$text, [int]$width, [int]$height) {
@@ -1243,78 +1226,23 @@ $stage.add_Paint({ param($s, $e) Paint-Stage $e.Graphics })
 $stage.add_DoubleClick({ if ($script:BarMode) { Set-BarMode $false } })
 
 # ---------------- presenter bar ----------------
-# When the facilitator shares the whole screen, the small corner window is hard to read
-# and covers content. Bar mode turns the window into a thin always-on-top strip across
-# the chosen edge of its screen, so the countdown is visible to everyone in the call.
+# The same form becomes a borderless bar in place and stays above other windows.
 $script:BarMode = $false
-$script:BarH = 58
-$script:BarEdge = $script:Cfg.BarEdge
 $script:NormalBounds = $null
 $script:BarDrag = $null
 
-# WorkingArea keeps every dock position clear of the Windows taskbar.
-function Get-BarBounds($wa, [string]$edge = $script:BarEdge) {
-    $width = [math]::Min($wa.Width, (S 650))
-    $height = if ($width -lt (S $script:BarTwoRowWidth)) { S 88 } else { S $script:BarH }
-    $height = [math]::Min($wa.Height, $height)
-    $sideWidth = [math]::Min($wa.Width, (S 164))
-    $sideHeight = [math]::Min($wa.Height, (S 320))
-    $centerX = $wa.Left + [int](($wa.Width - $width) / 2)
-    $centerY = $wa.Top + [int](($wa.Height - $sideHeight) / 2)
-    switch ($edge) {
-        'top' { New-Object Drawing.Rectangle($centerX, $wa.Top, $width, $height) }
-        'left' { New-Object Drawing.Rectangle($wa.Left, $centerY, $sideWidth, $sideHeight) }
-        'right' { New-Object Drawing.Rectangle(($wa.Right - $sideWidth), $centerY, $sideWidth, $sideHeight) }
-        default { New-Object Drawing.Rectangle($centerX, ($wa.Bottom - $height), $width, $height) }
-    }
-}
-
-function Get-NearestBarEdge($point, $wa) {
-    $distances = @{
-        bottom = [math]::Abs($point.Y - $wa.Bottom)
-        top = [math]::Abs($point.Y - $wa.Top)
-        left = [math]::Abs($point.X - $wa.Left)
-        right = [math]::Abs($point.X - $wa.Right)
-    }
-    $nearest = 'bottom'
-    foreach ($edge in @('top','left','right')) {
-        if ($distances[$edge] -lt $distances[$nearest]) { $nearest = $edge }
-    }
-    $nearest
-}
-
 function Layout-BarControls {
     if (-not $script:BarMode) { return }
-    $vertical = $script:BarEdge -eq 'left' -or $script:BarEdge -eq 'right'
-    if ($vertical) {
-        $x = [int](($stage.ClientSize.Width - (S 72)) / 2)
-        $y = $stage.ClientSize.Height - (S 88)
-        for ($i = 0; $i -lt $barButtons.Count; $i++) {
-            $button = $barButtons[$i]
-            $button.Size = New-Object Drawing.Size((S 32), (S 32))
-            $button.Location = New-Object Drawing.Point(($x + ($i % 2) * (S 40)), ($y + [int][math]::Floor($i / 2) * (S 40)))
-        }
-    } else {
-        $x = $stage.ClientSize.Width - (S 12)
-        $y = if ($stage.ClientSize.Width -lt (S $script:BarTwoRowWidth)) { $stage.ClientSize.Height - (S 42) }
-             else { [int](($stage.ClientSize.Height - (S 36)) / 2) }
-        for ($i = $barButtons.Count - 1; $i -ge 0; $i--) {
-            $button = $barButtons[$i]
-            $button.Size = New-Object Drawing.Size((S 32), (S 32))
-            $x -= $button.Width
-            $button.Location = New-Object Drawing.Point($x, $y)
-            $x -= S 4
-        }
+    $x = $stage.ClientSize.Width - (S 12)
+    $y = if ($stage.ClientSize.Width -lt (S $script:BarTwoRowWidth)) { $stage.ClientSize.Height - (S 42) }
+         else { [int](($stage.ClientSize.Height - (S 36)) / 2) }
+    for ($i = $barButtons.Count - 1; $i -ge 0; $i--) {
+        $button = $barButtons[$i]
+        $button.Size = New-Object Drawing.Size((S 32), (S 32))
+        $x -= $button.Width
+        $button.Location = New-Object Drawing.Point($x, $y)
+        $x -= S 4
     }
-}
-
-function Dock-Bar($point) {
-    $wa = [Windows.Forms.Screen]::FromPoint($point).WorkingArea
-    $script:BarEdge = Get-NearestBarEdge $point $wa
-    $form.Bounds = Get-BarBounds $wa
-    Layout-BarControls
-    $stage.Invalidate()
-    try { Save-Config } catch { }
 }
 
 function Set-BarMode([bool]$on) {
@@ -1324,13 +1252,14 @@ function Set-BarMode([bool]$on) {
     $script:BarMode = $on
     $form.SuspendLayout()
     if ($on) {
-        $script:NormalBounds = $form.Bounds
-        $wa = [Windows.Forms.Screen]::FromControl($form).WorkingArea
+        $bounds = $form.Bounds
+        $script:NormalBounds = $bounds
+        $height = if ($bounds.Width -lt (S $script:BarTwoRowWidth)) { S 88 } else { S 58 }
         $form.MinimumSize = [Drawing.Size]::Empty
         $form.FormBorderStyle = 'None'
         $strip.Visible = $false
         $band.Visible = $false
-        $form.Bounds = Get-BarBounds $wa
+        $form.SetBounds($bounds.X, $bounds.Y, $bounds.Width, $height)
         $form.TopMost = $true
     } else {
         $form.FormBorderStyle = 'Sizable'
@@ -1367,15 +1296,12 @@ $stage.add_MouseMove({
 $stage.add_MouseUp({
     param($s, $e)
     if ($e.Button -ne 'Left' -or $null -eq $script:BarDrag) { return }
-    $moved = $script:BarDrag.Moving
     $script:BarDrag = $null
     $stage.Capture = $false
-    if ($moved) { Dock-Bar ([Windows.Forms.Cursor]::Position) }
 })
 $stage.add_MouseCaptureChanged({
     if ($script:BarDrag -and -not $stage.Capture) {
         $script:BarDrag = $null
-        if ($script:BarMode) { $form.Bounds = Get-BarBounds ([Windows.Forms.Screen]::FromControl($form).WorkingArea); Layout-BarControls }
     }
 })
 $stage.add_Resize({ Layout-BarControls })
