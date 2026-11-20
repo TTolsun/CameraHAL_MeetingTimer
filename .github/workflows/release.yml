@@ -1,0 +1,65 @@
+name: Package Windows and Chrome releases
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+jobs:
+  package:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Check timer model and native controls
+        shell: powershell
+        run: |
+          .\tests\TimeModel.Tests.ps1
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          .\tests\Ui.Tests.ps1
+      - name: Build both ZIPs
+        shell: powershell
+        run: .\scripts\Build-Release.ps1
+      - name: Get Chrome for Testing
+        shell: pwsh
+        run: |
+          $versions = Invoke-RestMethod 'https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json'
+          $url = ($versions.channels.Stable.downloads.chrome | Where-Object platform -eq win64).url
+          $zip = Join-Path $env:RUNNER_TEMP chrome.zip
+          curl.exe -fLsS $url -o $zip
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          tar.exe -xf $zip -C $env:RUNNER_TEMP
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          "CHROME_FOR_TESTING=$env:RUNNER_TEMP\chrome-win64\chrome.exe" >> $env:GITHUB_ENV
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Open and exercise the extracted packages
+        shell: powershell
+        run: .\tests\Release.Tests.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: meeting-timer-packages
+          path: |
+            dist/MeetingTimer-Windows.zip
+            dist/MeetingTimer-Chrome.zip
+          if-no-files-found: error
+  draft:
+    if: github.event_name == 'push'
+    needs: package
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: meeting-timer-packages
+      - name: Attach both packages to the draft release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create $env:GITHUB_REF_NAME .\MeetingTimer-Windows.zip .\MeetingTimer-Chrome.zip --repo $env:GITHUB_REPOSITORY --draft --verify-tag --generate-notes

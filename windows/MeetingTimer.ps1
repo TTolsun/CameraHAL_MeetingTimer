@@ -1,14 +1,16 @@
-﻿# CameraHAL_MeetingTimer.ps1 - Compact weekly meeting speaker timer (Windows PowerShell 5.1 + WinForms)
+﻿# MeetingTimer.ps1 - Compact weekly meeting speaker timer (Windows PowerShell 5.1 + WinForms)
 #
 # - Meeting end defaults to the next full hour after launch (14:05 -> 15:00).
 # - Enter only the number of speakers; the remaining meeting time is split
 #   automatically. Each speaker's share is locked when they start, so an
 #   overrun shrinks the shares of the people still waiting.
-# - A camera marks the current speaker. The overtime digits change color at +00:15.
+# - A highlighted number marks the current speaker in the bar. Overtime digits change color at +00:15.
 #
 # Visual style follows the HP-inspired DESIGN.md (getdesign.md/hp): white canvas,
 # #1a1a1a ink, a single #024ad8 accent, 4px buttons, 1px hairlines.
-# Launch with CameraHAL_MeetingTimer.bat (WinForms needs a single-threaded apartment, hence -STA).
+# Launch with MeetingTimer.bat (WinForms needs a single-threaded apartment, hence -STA).
+
+param([string]$ConfigPath = (Join-Path $PSScriptRoot 'config.json'))
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
@@ -177,8 +179,7 @@ public class MtButton : Button {
 $script:Scale = [Drawing.Graphics]::FromHwnd([IntPtr]::Zero).DpiX / 96.0
 function S([double]$v) { [int][math]::Round($v * $script:Scale) }
 
-$script:Dir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$script:ConfigFile = Join-Path $script:Dir 'config.json'
+$script:ConfigFile = $ConfigPath
 
 # ---------------- design tokens ----------------
 function Col([string]$hex) { [Drawing.ColorTranslator]::FromHtml($hex) }
@@ -196,7 +197,7 @@ $Themes = @{
         Paper = '#ffffff'; Ink = '#1a1a1a'; Sub = '#636363'; Hair = '#e8e8e8'; Band = '#f7f7f7'
         Strip = '#1a1a1a'; StripInk = '#ffffff'; StripMute = '#c2c2c2'; StripHover = '#292929'
         Accent = '#024ad8'; Plus = '#8fb4ff'; Warn = '#ff5050'; Zero = '#636363'
-        Overtime = '#8a4d22'; BarOvertime = '#ebb186'; Camera = '#007858'; BarCamera = '#83e4bb'; ActiveSpeaker = '#dcefe8'; BarActiveSpeaker = '#29433a'
+        Overtime = '#8a4d22'; BarOvertime = '#ebb186'; BarActiveSpeaker = '#29433a'
         IdleInk = '#3d3d3d'; IdleLine = '#c2c2c2'; Done = '#3d3d3d'
         BarTrack = '#3d3d3d'
         BtnPrimary = '#024ad8'; BtnPrimaryInk = '#ffffff'; BtnPrimaryHover = '#0340b8'; BtnPrimaryPress = '#0e3191'
@@ -208,7 +209,7 @@ $Themes = @{
         Paper = '#07080a'; Ink = '#f4f4f6'; Sub = '#9c9c9d'; Hair = '#242728'; Band = '#0d0d0d'
         Strip = '#0d0d0d'; StripInk = '#f4f4f6'; StripMute = '#9c9c9d'; StripHover = '#1c1c1d'
         Accent = '#57c1ff'; Plus = '#57c1ff'; Warn = '#ff6161'; Zero = '#6a6b6c'
-        Overtime = '#ebb186'; BarOvertime = '#ebb186'; Camera = '#83e4bb'; BarCamera = '#83e4bb'; ActiveSpeaker = '#1d382f'; BarActiveSpeaker = '#29433a'
+        Overtime = '#ebb186'; BarOvertime = '#ebb186'; BarActiveSpeaker = '#29433a'
         IdleInk = '#cdcdcd'; IdleLine = '#434345'; Done = '#8a8a8c'
         BarTrack = '#242728'
         BtnPrimary = '#ffffff'; BtnPrimaryInk = '#000000'; BtnPrimaryHover = '#e8e8e8'; BtnPrimaryPress = '#cfcfcf'
@@ -279,17 +280,11 @@ function Save-Config {
         Bar      = [bool]$script:BarMode
         Theme    = [string]$script:ThemeName
     } | ConvertTo-Json
+    [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($script:ConfigFile))
     [IO.File]::WriteAllText($script:ConfigFile, $json, (New-Object Text.UTF8Encoding $false))
 }
 
-# Default meeting end: the next full hour, or the one after it when the next one is less
-# than 10 minutes away (opening the timer at 13:55 for a 14:00 meeting gives 15:00, not 14:00).
-function Get-NextHour {
-    $now = Get-Date
-    $end = $now.Date.AddHours($now.Hour + 1)
-    if (($end - $now).TotalMinutes -lt 10) { $end = $end.AddHours(1) }
-    $end
-}
+. (Join-Path $PSScriptRoot 'TimeModel.ps1')
 
 $script:Cfg = Load-Config
 $script:ThemeName = $script:Cfg.Theme
@@ -301,89 +296,6 @@ $script:Idx = 0
 # Minimum share per speaker (seconds) and the first plan, fixed when the first speaker starts (0 = not set).
 $script:MinShare = 60
 $script:Plan = 0.0
-
-# ---------------- time helpers ----------------
-function Fmt([double]$sec) {
-    $s = [int][math]::Floor([math]::Abs($sec))
-    '{0:00}:{1:00}' -f [int][math]::Floor($s / 60), ($s % 60)
-}
-
-function Get-Elapsed([int]$i) {
-    $p = $script:People[$i]
-    if ($i -eq $script:Idx) { $p.Used + $script:Sw.Elapsed.TotalSeconds } else { $p.Used }
-}
-
-function Get-MeetingLeft { ($script:End - (Get-Date)).TotalSeconds }
-
-# Pure share calculation (no clock or UI state) so it can be checked in isolation.
-# Whoever finished early leaves no reserved time, so their unused seconds flow into
-# $left and are split evenly across the speakers who have not started.
-function Calc-Share([double]$left, [double]$reserved, [int]$pending, [double]$min = 0) {
-    if ($pending -le 0) { return 0 }
-    $share = [math]::Max(0, $left - $reserved) / $pending
-    # Whole seconds: while a speaker waits to start, the share follows the clock second by second.
-    [math]::Max($min, [math]::Floor($share))
-}
-
-# Time the current (locked) speaker still has, and how many speakers have no share yet.
-function Get-Pending {
-    $cur = $script:People[$script:Idx]
-    $reserved = 0.0
-    if ($cur.Budget -gt 0) { $reserved = [math]::Max(0, $cur.Budget - (Get-Elapsed $script:Idx)) }
-    $pending = @(for ($j = $script:Idx; $j -lt $script:People.Count; $j++) { if (-not $script:People[$j].Started) { $j } }).Count
-    [pscustomobject]@{ Reserved = $reserved; Pending = $pending }
-}
-
-# Share for a speaker who has not started yet: the meeting time that is left,
-# minus what the current (locked) speaker still has, split across everyone unlocked.
-function Get-Preview {
-    if ((Get-MeetingLeft) -le 0) { return 0 }
-    $pi = Get-Pending
-    Calc-Share (Get-MeetingLeft) $pi.Reserved $pi.Pending $script:MinShare
-}
-
-# True when the one-minute minimum no longer fits before the meeting end time.
-function Test-Overbooked {
-    $pi = Get-Pending
-    $pi.Pending -gt 0 -and ((Get-MeetingLeft) - $pi.Reserved) -lt ($pi.Pending * $script:MinShare)
-}
-
-function Get-Budget([int]$i) {
-    $b = $script:People[$i].Budget
-    if ($script:People[$i].Started) { $b } else { Get-Preview }
-}
-
-function Lock-Budget {
-    $p = $script:People[$script:Idx]
-    if (-not $p.Started) {
-        # The first plan is the share at the moment the first speaker starts, before any minimum is applied.
-        if ($script:Plan -le 0) {
-            $pi = Get-Pending
-            $script:Plan = Calc-Share (Get-MeetingLeft) $pi.Reserved $pi.Pending 0
-        }
-        $p.Budget = Get-Preview
-        $p.Started = $true
-    }
-}
-
-function Get-Phase {
-    $budget = Get-Budget $script:Idx
-    $el = Get-Elapsed $script:Idx
-    $rem = $budget - $el
-    # Keep phase boundaries relative to the locked budget; the final minute also shows guidance.
-    $noticeAt = $budget * 0.3
-    $criticalAt = $budget * 0.1
-    $started = $script:People[$script:Idx].Started
-    $level = if (-not $started -and $rem -le 0) { 'normal' } elseif ($rem -le 0) { 'over' } elseif ($rem -le $criticalAt) { 'critical' } elseif ($rem -le $noticeAt) { 'notice' } else { 'normal' }
-    $run = if ($script:Sw.IsRunning) { 'run' } elseif (-not $started) { 'idle' } else { 'pause' }
-    $text = if (-not $started -and $rem -le 0) { '00:00' } elseif ($rem -gt 0) { Fmt ([math]::Ceiling($rem)) } else { '+' + (Fmt ([math]::Floor(-$rem))) }
-    $closing = $run -eq 'run' -and $rem -gt 0 -and ($rem -le 60 -or $rem -le $noticeAt)
-    [pscustomobject]@{ El = $el; Rem = $rem; Budget = $budget; Level = $level; Run = $run; Text = $text; Closing = $closing; Highlight = $started -and $rem -le -15 }
-}
-
-function New-Person {
-    [pscustomobject]@{ Used = 0.0; Budget = 0.0; Started = $false }
-}
 
 # ---------------- drawing helpers ----------------
 function Draw-Text($g, [string]$text, $font, $color, [int]$x, [int]$y, [int]$w, [int]$h, [string]$align = 'Left') {
@@ -485,7 +397,7 @@ function Get-MinClientWidth {
 
 # ---------------- window ----------------
 $form = New-Object Windows.Forms.Form
-$form.Text = 'CameraHAL_MeetingTimer'
+$form.Text = '회의 타이머'
 $form.ClientSize = New-Object Drawing.Size((S 380), (S 328))
 $form.MinimumSize = New-Object Drawing.Size(((Get-MinClientWidth) + ($form.Width - $form.ClientSize.Width)), (S 328))
 $form.MaximizeBox = $false
@@ -519,7 +431,6 @@ $form.Controls.Add($strip)
 
 $timer = New-Object Windows.Forms.Timer
 $timer.Interval = 200
-$script:BatonStarted = $null
 $script:BarTwoRowWidth = 520
 
 # ---------------- painting ----------------
@@ -597,39 +508,24 @@ function Get-SpeakerWindow([int]$count, [int]$current) {
     [pscustomobject]@{ First = $first; Last = $first + $size - 1; Before = $first -gt 0; After = $first + $size -lt $count }
 }
 
-function Get-BatonOffset {
-    if ($null -eq $script:BatonStarted) { return 0.0 }
-    $t = [math]::Max(0.0, [math]::Min(1.0, ((Get-Date) - $script:BatonStarted).TotalMilliseconds / 240))
-    -[math]::Pow(1 - $t, 2)
-}
-
-function Paint-SpeakerBaton($g, [int]$left, [int]$top, [int]$width, [bool]$bar = $false) {
-    $n = $script:People.Count
-    $window = Get-SpeakerWindow $n $script:Idx
+function Paint-BarSpeakers($g, [int]$left, [int]$width, [int]$height) {
+    $window = Get-SpeakerWindow $script:People.Count $script:Idx
     $slot = S 22
     $rowW = ($window.Last - $window.First + 1) * $slot
+    $labelH = S 24
+    $labelTop = [int](($height - $labelH) / 2)
     $x = $left + [int](($width - $rowW) / 2)
-    $muted = if ($bar) { $C.StripMute } else { $C.Sub }
-    $ink = if ($bar) { $C.StripInk } else { $C.Ink }
-    $camera = if ($bar) { $C.BarCamera } else { $C.Camera }
-    $active = if ($bar) { $C.BarActiveSpeaker } else { $C.ActiveSpeaker }
-    $surface = if ($bar) { $C.Strip } else { $C.Paper }
-    $labelTop = $top + (S 14)
-    if ($window.Before) { Draw-Text $g '…' (FK 12) $muted ($x - (S 14)) $labelTop (S 14) (S 18) 'Center' }
-    if ($window.After) { Draw-Text $g '…' (FK 12) $muted ($x + $rowW) $labelTop (S 14) (S 18) 'Center' }
+    if ($window.Before) { Draw-Text $g '…' (FK 12) $C.StripMute ($x - (S 14)) $labelTop (S 14) $labelH 'Center' }
+    if ($window.After) { Draw-Text $g '…' (FK 12) $C.StripMute ($x + $rowW) $labelTop (S 14) $labelH 'Center' }
     for ($i = $window.First; $i -le $window.Last; $i++) {
         $slotX = $x + ($i - $window.First) * $slot
-        $fg = $muted
+        $fg = $C.StripMute
         if ($i -eq $script:Idx) {
-            Fill-Round $g $active $slotX $labelTop $slot (S 18) (S 5)
-            $fg = $ink
+            Fill-Round $g $C.BarActiveSpeaker $slotX $labelTop $slot $labelH (S 5)
+            $fg = $C.StripInk
         }
-        Draw-Text $g ($i + 1) (FN 12) $fg $slotX $labelTop $slot (S 18) 'Center'
+        Draw-Text $g ($i + 1) (FN 13) $fg $slotX $labelTop $slot $labelH 'Center'
     }
-    $center = $x + ($script:Idx - $window.First + 0.5 + (Get-BatonOffset)) * $slot
-    Fill-Round $g $camera ($center - (S 9)) ($top + (S 2)) (S 18) (S 11) (S 3)
-    Fill-Round $g $camera ($center - (S 4)) $top (S 8) (S 4) (S 1)
-    Fill-Round $g $surface ($center - (S 4)) ($top + (S 3)) (S 8) (S 8) (S 4)
 }
 
 function Get-RemainingMessage([double]$seconds) {
@@ -668,11 +564,11 @@ function Paint-Bar($g) {
     $msg = Get-BarMessage $st
     $head = '{0} / {1}명' -f ($script:Idx + 1), $script:People.Count
     if ($W -lt (S $script:BarTwoRowWidth)) {
-        # In a narrow window the clock and camera share the top row; controls stay below.
+        # In a narrow window the speaker numbers and clock share the top row.
         $pad = S 8
-        $batonW = S 140
-        $clockX = $pad + $batonW
-        Paint-SpeakerBaton $g $pad (S 5) $batonW $true
+        $speakerW = S 140
+        $clockX = $pad + $speakerW
+        Paint-BarSpeakers $g $pad $speakerW (S 42)
         $clockW = $W - $clockX - $pad
         if ($msg -eq $script:MsgBarFinish) {
             Draw-Text $g $st.Text (FN 23) $dc $clockX 0 $clockW (S 27) 'Center'
@@ -691,11 +587,11 @@ function Paint-Bar($g) {
     } else {
         $headW = S 72
         $clockW = S 134
-        $batonW = S 146
+        $speakerW = S 146
         $pad = S 12
         Draw-Text $g $head (FKM 15) $C.StripInk $pad 0 $headW ($H - (S 4)) 'Center'
-        Paint-SpeakerBaton $g ($pad + $headW) (S 12) $batonW $true
-        $clockX = $pad + $headW + $batonW
+        Paint-BarSpeakers $g ($pad + $headW) $speakerW ($H - (S 4))
+        $clockX = $pad + $headW + $speakerW
         $messageX = $clockX + $clockW
         $messageW = $btnBarRun.Left - $messageX - (S 8)
         if ($msg -eq $script:MsgBarFinish -and $messageW -lt (Measure-W $msg (FKM 12))) {
@@ -812,7 +708,7 @@ function Refresh-All {
     # The title doubles as the taskbar label while minimized.
     $speaker = $script:Idx + 1
     if ($script:BarMode) { $speaker = '{0}/{1}' -f $speaker, $script:People.Count }
-    $form.Text = '{0} · 발표자 {1} · CameraHAL_MeetingTimer' -f $st.Text, $speaker
+    $form.Text = '{0} · 발표자 {1} · 회의 타이머' -f $st.Text, $speaker
     $strip.Invalidate()
     $stage.Invalidate()
 }
@@ -866,9 +762,7 @@ function Go-Next {
         Commit-Current
         Start-Over
     } else {
-        $script:BatonStarted = Get-Date
         Switch-To ($script:Idx + 1)
-        if ($timer) { $timer.Interval = 30 }
     }
 }
 
@@ -886,7 +780,6 @@ function Reset-Current {
 }
 
 function Start-Over([datetime]$endTime = (Get-NextHour)) {
-    $script:BatonStarted = $null
     $script:Sw.Reset()
     $script:People = @(1..$script:Cfg.Count | ForEach-Object { New-Person })
     $script:Idx = 0
@@ -920,7 +813,6 @@ function Undo-Last {
     if (-not (Test-UndoAllowed)) { return }
     $script:Undo = $null
     $script:Sw.Reset()
-    $script:BatonStarted = $null
     $script:People = $u.People
     $script:Idx = $u.Idx
     $script:End = $u.End
@@ -1095,8 +987,9 @@ function Show-Settings {
             Show-ScheduleNotice ("기본 종료 시각은 {0:HH:mm}입니다.`n`n{1}`n직접 정한 종료 시각을 쓰려면 설정에서 저장을 눌러 주세요." -f $defaultEnd, $issue)
             return
         }
-        $r = [Windows.Forms.MessageBox]::Show($script:SetDlg, "기록을 모두 지우고 종료 시각을 다음 정각으로 되돌립니다.`n진행할까요?", '새 회의', 'YesNo', 'Warning')
-        if ($r -eq 'Yes') { $script:SetProposedEnd = $defaultEnd; $script:SetStartOver = $true; $script:SetDlg.DialogResult = 'OK'; $script:SetDlg.Close() }
+        if (Confirm-Action ("기록을 모두 지우고 종료 시각을 {0:HH:mm}으로 바꿀까요?" -f $defaultEnd) '새 회의') {
+            $script:SetProposedEnd = $defaultEnd; $script:SetStartOver = $true; $script:SetDlg.DialogResult = 'OK'; $script:SetDlg.Close()
+        }
     } $L
     $restart.TabIndex = 3
     $restart.Location = New-Object Drawing.Point((S 24), (S 282))
@@ -1183,7 +1076,7 @@ function Set-Theme([string]$name) {
     $script:C = $Themes[$name]
     $form.BackColor = $C.Paper
     $strip.BackColor = $C.Strip
-    $stage.BackColor = $C.Paper
+    $stage.BackColor = if ($script:BarMode) { $C.Strip } else { $C.Paper }
     $band.BackColor = $C.Band
     Set-ButtonKind $btnRun 'primary'
     Set-ButtonKind $btnNext 'ink'
@@ -1250,6 +1143,7 @@ function Set-BarMode([bool]$on) {
     $script:BarDrag = $null
     $stage.Capture = $false
     $script:BarMode = $on
+    $stage.BackColor = if ($on) { $C.Strip } else { $C.Paper }
     $form.SuspendLayout()
     if ($on) {
         $bounds = $form.Bounds
@@ -1340,13 +1234,7 @@ $form.add_KeyDown({
     $e.SuppressKeyPress = $true
 })
 
-$timer.add_Tick({
-    if ($timer.Interval -ne 200 -and (Get-BatonOffset) -eq 0) {
-        $script:BatonStarted = $null
-        $timer.Interval = 200
-    }
-    Refresh-All
-})
+$timer.add_Tick({ Refresh-All })
 
 $form.add_FormClosing({
     $timer.Stop()

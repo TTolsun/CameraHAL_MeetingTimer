@@ -3,7 +3,8 @@ param([string]$RenderDirectory = '')
 $ErrorActionPreference = 'Stop'
 if ($RenderDirectory) { [void][IO.Directory]::CreateDirectory($RenderDirectory) }
 $repo = Split-Path -Parent $PSScriptRoot
-$source = [IO.File]::ReadAllText((Join-Path $repo 'CameraHAL_MeetingTimer.ps1'))
+$windows = Join-Path $repo 'windows'
+$source = [IO.File]::ReadAllText((Join-Path $windows 'MeetingTimer.ps1'))
 $bootstrap = $source.Substring(0, $source.IndexOf('# ---------------- start ----------------'))
 $bootstrap = $bootstrap.Replace('$dlg.ShowDialog($form)', '(Invoke-TestDialog $dlg)')
 # Feed screen coordinates to the real handlers without moving the desktop cursor.
@@ -13,13 +14,36 @@ $testDirectory = Join-Path $repo ('.ui-test-' + [guid]::NewGuid().ToString('N'))
 [void][IO.Directory]::CreateDirectory($testDirectory)
 $bootstrapPath = Join-Path $testDirectory 'Application.ps1'
 [IO.File]::WriteAllText($bootstrapPath, $bootstrap, (New-Object Text.UTF8Encoding $true))
+$modelPath = Join-Path $testDirectory 'TimeModel.ps1'
+Copy-Item -LiteralPath (Join-Path $windows 'TimeModel.ps1') -Destination $modelPath
 . $bootstrapPath
 Add-Type -ReferencedAssemblies System.Windows.Forms, System.Drawing -TypeDefinition @'
 using System;
 using System.Reflection;
 using System.Drawing;
+using System.Runtime.InteropServices;
 using System.Windows.Forms;
 public static class TimerTestInput {
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    static extern IntPtr FindWindow(string cls, string title);
+    [DllImport("user32.dll")]
+    static extern IntPtr GetDlgItem(IntPtr hwnd, int id);
+    [DllImport("user32.dll")]
+    static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint pid);
+    [DllImport("user32.dll")]
+    static extern bool PostMessage(IntPtr hwnd, int msg, IntPtr wparam, IntPtr lparam);
+    public static void AnswerConfirmation(bool yes) {
+        var timer = new Timer { Interval = 50 };
+        timer.Tick += delegate {
+            IntPtr dialog = FindWindow("#32770", "새 회의");
+            uint pid;
+            GetWindowThreadProcessId(dialog, out pid);
+            if (pid != System.Diagnostics.Process.GetCurrentProcess().Id) return;
+            timer.Stop(); timer.Dispose();
+            PostMessage(GetDlgItem(dialog, yes ? 6 : 7), 0x00F5, IntPtr.Zero, IntPtr.Zero);
+        };
+        timer.Start();
+    }
     public static KeyEventArgs Key(Control control, Keys key) {
         KeyEventArgs args = new KeyEventArgs(key);
         typeof(Control).GetMethod("OnKeyDown", BindingFlags.Instance | BindingFlags.NonPublic)
@@ -77,7 +101,7 @@ function Invoke-TestNotice($notice) {
         $script:NoticeReason = $body.Text
         Assert ($body.Bottom -lt $notice.AcceptButton.Top) 'The explanation fits above the action'
         if ($RenderDirectory -and $body.Text -match '6명.*최소 6분') { Save-DialogRender $notice 'schedule-notice' }
-        [TimerTestInput]::DialogKey($notice, [Windows.Forms.Keys]::Escape)
+        $notice.AcceptButton.PerformClick()
     } finally { $notice.Close() }
 }
 function Invoke-TestDialog($dialog) {
@@ -86,11 +110,22 @@ function Invoke-TestDialog($dialog) {
         Assert ($dialog.Controls['MeetingEnd'].CustomFormat -eq 'HH:mm') 'End picker must remain time-only'
         Assert ($dialog.AcceptButton.TabStop -and $dialog.CancelButton.TabStop) 'Dialog actions need keyboard focus'
         switch ($script:DialogCase) {
+            'Restart' {
+                $restart = $dialog.Controls | Where-Object Text -eq '새 회의 시작'
+                [TimerTestInput]::AnswerConfirmation($false)
+                $restart.PerformClick()
+                Assert ($dialog.Visible -and $script:Idx -eq 1) 'Declining restart keeps the meeting and settings open'
+                [TimerTestInput]::AnswerConfirmation($true)
+                $restart.PerformClick()
+                Assert ($dialog.DialogResult -eq 'OK') 'Confirming restart applies the new meeting'
+            }
             'Unrelated' {
                 Assert ($dialog.Controls['SpeakerCount'].Value -eq 6) 'Opening past-deadline settings must preserve speaker count'
                 $alwaysOnTop = @($dialog.Controls | Where-Object { $_ -is [Windows.Forms.CheckBox] })
                 Assert ($alwaysOnTop.Count -eq 1 -and $alwaysOnTop[0].Text -notmatch '알림음') 'Settings offer only the existing always-on-top checkbox'
-                $alwaysOnTop[0].Checked = -not $alwaysOnTop[0].Checked
+                $before = $alwaysOnTop[0].Checked
+                [TimerTestInput]::Click($alwaysOnTop[0])
+                Assert ($alwaysOnTop[0].Checked -ne $before) 'Clicking always-on-top toggles the preference'
                 [TimerTestInput]::DialogKey($dialog, [Windows.Forms.Keys]::Enter)
                 Assert ($dialog.DialogResult -eq 'OK') 'Enter must save settings'
             }
@@ -124,6 +159,9 @@ function Invoke-TestDialog($dialog) {
                 $count.Value = 1
                 $count.UpButton()
                 Assert ($count.Value -eq 2) 'A permitted spinner increment succeeds'
+                $count.DownButton()
+                Assert ($count.Value -eq 1) 'Spinner decrement lowers the head count'
+                $count.UpButton()
                 $script:SavedEnd = $script:SetProposedEnd
                 $dialog.AcceptButton.PerformClick()
             }
@@ -133,8 +171,8 @@ function Invoke-TestDialog($dialog) {
             }
             'Cancel' {
                 $dialog.Controls['MeetingEnd'].Value = (Get-Date).AddHours(2)
-                [TimerTestInput]::DialogKey($dialog, [Windows.Forms.Keys]::Escape)
-                Assert ($dialog.DialogResult -eq 'Cancel') 'Escape must cancel settings'
+                $dialog.CancelButton.PerformClick()
+                Assert ($dialog.DialogResult -eq 'Cancel') 'Cancel button discards the draft'
             }
         }
         $dialog.DialogResult
@@ -195,9 +233,28 @@ try {
     # Initialize the paint handlers before exposing the window to synchronous native messages.
     foreach ($panel in @($strip, $stage, $band)) { [TimerTestInput]::Paint($panel) }
     $form.Show()
+    $btnDark.PerformClick()
+    Assert ($script:ThemeName -eq 'dark') 'Moon selects the dark theme'
+    $btnLight.PerformClick()
+    Assert ($script:ThemeName -eq 'light') 'Sun selects the light theme'
+    Fresh 2
+    $btnRun.PerformClick()
+    $btnRun.PerformClick()
+    Assert (-not $script:Sw.IsRunning -and -not $btnNext.Visible) 'Pause hides Next'
+    $btnRun.PerformClick()
+    $btnNext.PerformClick()
+    Assert ($script:Idx -eq 1 -and $btnNext.Text -eq '종료') 'Next reaches the final speaker'
+    $btnNext.PerformClick()
+    $btnUndo.PerformClick()
+    Assert ($script:Idx -eq 1 -and $script:Sw.IsRunning) 'Undo after Finish restores the running speaker'
+    $script:DialogCase = 'Restart'
+    $btnSet.PerformClick()
+    Assert ($script:Idx -eq 0 -and -not $script:Sw.IsRunning) 'Confirmed restart returns to speaker one'
+    Fresh
     $normalBounds = $form.Bounds
     [TimerTestInput]::Click($btnBar)
     Assert $script:BarMode 'Bar button enters presenter mode'
+    Assert ($stage.BackColor -eq $C.Strip) 'Presenter button corners match the bar'
     Assert ($form.Location -eq $normalBounds.Location -and $form.Width -eq $normalBounds.Width) 'Bar entry keeps the normal location and minimum width at a screen edge'
     Assert ($form.Height -lt $normalBounds.Height -and $form.Width -gt $form.Height) 'Bar entry reduces the height and remains horizontal'
     Assert ($form.TopMost -and -not (Load-Config).TopMost) 'Presenter mode stays on top without saving it as the normal preference'
@@ -244,10 +301,8 @@ try {
     Assert ($script:Sw.IsRunning -and $btnBarRun.Text -eq '일시정지') 'Presenter Continue resumes the clock'
     [TimerTestInput]::Click($btnBarNext)
     Assert ($script:Idx -eq 1) 'Presenter next button switches speakers'
-    Assert ($null -ne $script:BatonStarted) 'Presenter Next starts one camera movement'
     [TimerTestInput]::Click($btnBarUndo)
     Assert ($script:Idx -eq 0) 'Presenter undo button restores the speaker'
-    Assert ($null -eq $script:BatonStarted) 'Presenter Undo places the camera without replaying movement'
     [TimerTestInput]::Click($btnBarBack)
     Assert (-not $script:BarMode -and $form.Bounds -eq $normalBounds) 'Back button restores the normal window bounds'
     Assert (-not $form.TopMost) 'Back button restores the disabled always-on-top preference'
@@ -282,7 +337,7 @@ try {
         Assert ([TimerTestInput]::SendKey($runButton, [Windows.Forms.Keys]::Right)) 'Right is consumed during a run'
         Assert ($script:Idx -eq 1 -and ($form.ActiveControl -eq $runButton)) 'Right advances while keeping button focus'
         if (-not $usePresenterBar) {
-            Assert ($form.Text -match '^\+?\d{2,}:[0-5]\d · 발표자 2 · CameraHAL_MeetingTimer$') 'Normal title and taskbar label identify only the current speaker'
+            Assert ($form.Text -match '^\+?\d{2,}:[0-5]\d · 발표자 2 · 회의 타이머$') 'Normal title and taskbar label identify only the current speaker'
             if ($RenderDirectory) { Save-MainRender 'main-speaker-2' }
         }
         Toggle-Run
@@ -399,7 +454,6 @@ try {
         $script:Idx = 11
         Refresh-All
         Assert ($form.Width -eq $compactWidth) 'Fifty speakers do not change the presenter bar width'
-        Assert ($null -eq $script:BatonStarted) 'Pause and speaker count changes do not start movement'
         $script:People[11].Started = $true
         $script:People[11].Budget = 100
         $script:People[11].Used = 114
@@ -419,7 +473,6 @@ try {
         $script:People[11].Used = 115.5
         Assert ((Get-ClockColor (Get-Phase)) -eq (Get-ClockColor $highlighted)) 'Overtime highlight is stable'
         Set-BarMode $false
-        Assert ($null -eq $script:BatonStarted) 'Theme changes and returning to the main window do not start movement'
         if ($RenderDirectory) { Save-MainRender ($theme + '-crowded-over') }
     }
     Set-Theme 'light'
@@ -445,7 +498,7 @@ try {
     $script:Sw.Stop()
     $form.Dispose()
     $tips.Dispose()
-    foreach ($file in @($bootstrapPath, (Join-Path $testDirectory 'config.json'))) {
+    foreach ($file in @($bootstrapPath, $modelPath, (Join-Path $testDirectory 'config.json'))) {
         if ([IO.File]::Exists($file)) { [IO.File]::Delete($file) }
     }
     [IO.Directory]::Delete($testDirectory)

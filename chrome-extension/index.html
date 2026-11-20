@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#1a1a1a">
+  <title>회의 타이머</title>
+  <link rel="stylesheet" href="timer.css">
+  <script defer src="time-model.js"></script>
+  <script defer src="timer.js"></script>
+</head>
+<body>
+  <main class="timer" aria-label="회의 타이머">
+    <header class="strip">
+      <span>현재 <time id="now"></time></span>
+      <b id="delta" title="첫 발표 배정 시간과의 차이"></b>
+      <span>종료 <time id="deadline"></time></span><span id="left"></span>
+    </header>
+    <section class="stage" aria-label="현재 발표">
+      <div class="stage-head"><h1 id="speaker"></h1><span id="status"></span></div>
+      <div id="clock" role="timer">00:00</div>
+      <p id="budget"></p><p id="notice" role="status"></p>
+      <div id="segments" aria-hidden="true"></div>
+    </section>
+    <footer>
+      <div class="actions">
+        <button class="primary" id="run">시작</button><button class="ink" id="next" hidden>다음</button>
+        <button id="undo" disabled>되돌리기</button><button id="edit">설정</button>
+      </div>
+      <div class="tools">
+        <button id="light" aria-label="밝은 화면" title="밝은 화면">☀</button>
+        <button id="dark" aria-label="어두운 화면" title="어두운 화면">☾</button>
+        <button id="mini" aria-label="발표 막대 열기" title="발표 막대 열기 (B)"><i class="bar-icon"></i></button>
+      </div>
+    </footer>
+  </main>
+  <template id="barTemplate">
+    <main class="miniBar" aria-label="발표 막대">
+      <b class="count"></b><div class="slots" aria-label="발표 순서"></div>
+      <span class="miniClock" role="timer"></span><span class="message"></span>
+      <div class="controls">
+        <button class="primary" data-action="run"></button><button class="ink" data-action="next"></button>
+        <button data-action="undo" title="되돌리기" aria-label="되돌리기">↶</button>
+        <button data-action="back" title="기본 창으로 돌아가기" aria-label="기본 창으로 돌아가기">▣</button>
+      </div>
+      <div class="track"><i></i></div>
+    </main>
+  </template>
+  <dialog id="settings" aria-labelledby="settingsTitle"><form id="settingsForm">
+    <h2 id="settingsTitle">회의 설정</h2>
+    <label><span id="endLabel">회의 종료 시각</span><input id="endInput" type="time" required></label>
+    <label>발표 인원<input id="countInput" type="number" min="1" max="50" step="1" required></label>
+    <p id="settingHint" role="status"></p>
+    <div class="dialogActions"><button type="button" id="cancel">취소</button><button class="primary" type="submit">저장</button></div>
+  </form></dialog>
+</body>
+</html>
