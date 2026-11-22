@@ -1,5 +1,20 @@
 'use strict';
 
+const timerBounds = {width: 380, height: 290};
+
+chrome.runtime.onMessage.addListener((message, sender, reply) => {
+  if (message?.action !== 'reset-timer-size' || sender.url !== chrome.runtime.getURL('index.html') || !sender.tab) return;
+  async function restoreSize() {
+    const popup = await chrome.windows.get(sender.tab.windowId);
+    if (popup.type !== 'popup') return false;
+    if (popup.state !== 'normal') await chrome.windows.update(popup.id, {state: 'normal'});
+    await chrome.windows.update(popup.id, timerBounds);
+    return true;
+  }
+  restoreSize().then(reply, () => reply(false));
+  return true;
+});
+
 async function openTimer() {
   const url = chrome.runtime.getURL('index.html');
   // Chrome can suspend the worker while the timer window stays open.
@@ -19,7 +34,7 @@ async function openTimer() {
       // The timer window may have been closed between discovery and focus.
     }
   }
-  await chrome.windows.create({url, type: 'popup', width: 380, height: 290, focused: true});
+  await chrome.windows.create({url, type: 'popup', ...timerBounds, focused: true});
 }
 
 let opening;
