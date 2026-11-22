@@ -222,8 +222,34 @@ const resetSize = el('resetSize');
 setIconButton(resetSize, '기본 크기로 복원', 'reset-size');
 owner.then(popup => { resetSize.hidden = popup?.type !== 'popup'; }).catch(() => {});
 resetSize.onclick = async () => {
-  const restored = await chrome.runtime.sendMessage({action: 'reset-timer-size'}).catch(() => false);
-  if (!restored) notify('창 크기를 복원할 수 없습니다.');
+  if (resetSize.disabled || resetSize.hidden) return;
+  resetSize.disabled = true;
+  let popup;
+  try {
+    popup = await chrome.windows.getCurrent();
+    if (popup?.type !== 'popup' || popup.id !== (await owner)?.id) return;
+    try {
+      if (popup.state !== 'normal') await chrome.windows.update(popup.id, {state: 'normal'});
+      await chrome.windows.update(popup.id, timerBounds);
+    } catch (apiError) {
+      try {
+        window.resizeTo(timerBounds.width, timerBounds.height);
+        for (let attempt = 0; attempt < 10; attempt++) {
+          if (Math.abs(window.outerWidth - timerBounds.width) <= 2 &&
+              Math.abs(window.outerHeight - timerBounds.height) <= 2) return;
+          await new Promise(resolve => window.setTimeout(resolve, 50));
+        }
+      } catch (resizeError) {
+        console.error('Could not resize the timer popup using Window.resizeTo.', resizeError);
+      }
+      throw apiError;
+    }
+  } catch (error) {
+    console.error('Could not restore the timer popup to its default bounds.', {windowId: popup?.id, bounds: timerBounds}, error);
+    notify('창 크기를 복원할 수 없습니다.');
+  } finally {
+    resetSize.disabled = false;
+  }
 };
 let transition = Promise.resolve();
 async function openBar() {
