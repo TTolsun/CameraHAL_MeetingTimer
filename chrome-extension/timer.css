@@ -90,14 +90,18 @@ button svg {
   .strip-delta { text-align: left; }
   .strip-end, #left { justify-self: end; }
 }
-dialog { width: min(338px, calc(100vw - 16px)); max-height: calc(100dvh - 12px); padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; color: var(--ink); background: var(--paper); }
+dialog { width: min(338px, calc(100vw - 16px)); max-height: calc(100dvh - 12px); padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; color: var(--ink); background: var(--paper); }
 dialog::backdrop { background: #0006; }
 dialog h2 { margin: 0; font-size: 18px; }
 .dialogHead { justify-content: space-between; }
-.settingFields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(72px, .58fr); gap: 10px; margin-top: 6px; }
-input { display: block; width: 100%; min-height: 30px; padding: 4px; margin-top: 3px; }
-#settingHint { margin: 7px 0; color: var(--sub); font-size: 12px; }
-.dialogActions { justify-content: flex-end; gap: 4px; }
+.dialogHead button, .dialogActions button { min-height: 28px; }
+.dialogHead button { width: 28px; height: 28px; }
+.settingFields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(72px, .58fr); gap: 10px; margin-top: 4px; }
+input { display: block; width: 100%; min-height: 28px; padding: 2px 4px; margin-top: 2px; }
+.dialogFoot { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; margin-top: 6px; }
+#settingHint { color: var(--sub); font-size: 12px; line-height: 1.25; }
+.dialogActions { gap: 4px; }
+.dialogActions button { white-space: nowrap; padding-inline: 8px; }
 .miniBar {
   display: grid; grid-template-columns: 52px minmax(0, 1fr) auto;
   align-items: center; min-height: 100dvh; padding: 2px 8px 5px; gap: 6px;

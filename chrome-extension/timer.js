@@ -186,7 +186,7 @@ function updateSettingsHint() {
   const end = proposedEnd();
   const tomorrow = new Date(end).toDateString() !== new Date().toDateString() && end > Date.now();
   el('endLabel').textContent = tomorrow ? '회의 종료 시각 · 다음 날' : '회의 종료 시각';
-  el('settingHint').textContent = '종료 시각이나 인원을 바꿔 저장하면 새 회의가 시작됩니다.';
+  el('settingHint').textContent = '종료 시각이나 인원을 바꾸면 새 회의가 시작됩니다.';
 }
 el('settingsForm').oninput = updateSettingsHint;
 el('edit').onclick = () => {

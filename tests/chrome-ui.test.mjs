@@ -139,8 +139,25 @@ test('presenter bar replaces the visible popup and restores the same meeting', {
   }
   assert.ok(await run("el('mini').textContent.trim() === '발표 막대 열기' && !!el('mini').querySelector('svg[data-icon=bar]')"));
   await assertIcon('#edit', '회의 설정', 'settings');
+  async function assertSettingsControls() {
+    assert.equal(await run('document.activeElement?.id'), 'endInput', 'Settings must open with the end-time input focused');
+    const layout = await run(`(() => {
+      const dialog = el('settings');
+      const bounds = dialog.getBoundingClientRect();
+      const buttons = Array.from(dialog.querySelectorAll('.dialogActions button'), button => {
+        const box = button.getBoundingClientRect();
+        const hit = document.elementFromPoint((box.left + box.right) / 2, (box.top + box.bottom) / 2);
+        return {name: button.textContent, top: box.top, bottom: box.bottom, hit: button.contains(hit)};
+      });
+      return {height: innerHeight, dialogBottom: bounds.bottom, clientHeight: dialog.clientHeight,
+        scrollHeight: dialog.scrollHeight, buttons};
+    })()`);
+    assert.ok(layout.buttons.every(button => button.hit && button.top >= 0 &&
+      button.bottom <= Math.min(layout.height, layout.dialogBottom)),
+      'Settings buttons must be fully reachable without scrolling: ' + JSON.stringify(layout));
+  }
   await click('#edit');
-  assert.ok(await run("document.activeElement === el('endInput') && settings.scrollHeight === settings.clientHeight"));
+  await assertSettingsControls();
   await assertIcon('#theme', '어두운 화면으로 전환', 'moon');
   await click('#theme');
   assert.equal(await run("localStorage.getItem('timer-theme')"), 'dark');
@@ -274,5 +291,9 @@ test('presenter bar replaces the visible popup and restores the same meeting', {
   await assertStageFits();
   await run("notify('회의 종료 · 되돌리기로 마지막 발표를 복원할 수 있습니다.')");
   await assertStageFits();
+  await call('Emulation.setDeviceMetricsOverride', {width: 280, height: 154, deviceScaleFactor: 1, mobile: false}, page);
+  await until(() => run("innerHeight === 154"));
+  await run("el('edit').click()");
+  await assertSettingsControls();
   await call('Browser.close', {});
 });
