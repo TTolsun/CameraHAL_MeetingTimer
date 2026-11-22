@@ -75,18 +75,30 @@ function notify(text, compact = '') {
   barNotice = compact;
   noticeTimeout = window.setTimeout(() => { el('notice').textContent = ''; barNotice = ''; }, 5000);
 }
+const icons = el('icons').content;
+function iconFor(button, name) {
+  const icon = button.ownerDocument.importNode(icons.querySelector('[data-icon="' + name + '"]'), true);
+  icon.setAttribute('aria-hidden', 'true');
+  return icon;
+}
+function setIconButton(button, label, name) {
+  if (button.getAttribute('aria-label') === label) return;
+  button.setAttribute('aria-label', label);
+  button.title = label;
+  button.replaceChildren(iconFor(button, name));
+}
 function chooseTheme(theme) {
   document.documentElement.dataset.theme = theme;
   if (miniUI) mini.document.documentElement.dataset.theme = theme;
-  el('light').setAttribute('aria-pressed', theme === 'light');
-  el('dark').setAttribute('aria-pressed', theme === 'dark');
+  const dark = theme === 'dark';
+  setIconButton(el('theme'), dark ? '밝은 화면으로 전환' : '어두운 화면으로 전환', dark ? 'sun' : 'moon');
   try { localStorage.setItem('timer-theme', theme); } catch {}
 }
 let initialTheme = 'light';
 try { if (localStorage.getItem('timer-theme') === 'dark') initialTheme = 'dark'; } catch {}
 chooseTheme(initialTheme);
-el('light').onclick = () => chooseTheme('light');
-el('dark').onclick = () => chooseTheme('dark');
+el('theme').onclick = () => chooseTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark');
+el('mini').prepend(iconFor(el('mini'), 'bar'));
 
 function drawSpeakers(row, compact) {
   const key = state.index + '/' + state.count;
@@ -107,11 +119,6 @@ function drawSpeakers(row, compact) {
   }
   if (last < state.count) row.append('…');
 }
-function barButton(button, label, glyph) {
-  button.setAttribute('aria-label', label);
-  button.title = label;
-  button.textContent = glyph;
-}
 function render() {
   const now = Date.now();
   const rem = remaining(state, now);
@@ -131,8 +138,11 @@ function render() {
   const countdown = [Math.floor(seconds / 60) && Math.floor(seconds / 60) + '분', seconds % 60 && seconds % 60 + '초'].filter(Boolean).join(' ') + ' 남았어요';
   el('now').textContent = hour(now);
   const delta = state.plan == null ? 0 : budget - state.plan;
-  el('delta').textContent = (delta < 0 ? '−' : delta > 0 ? '+' : '±') + duration(Math.abs(delta));
-  el('delta').dataset.sign = delta < 0 ? 'minus' : delta > 0 ? 'plus' : '';
+  el('delta').hidden = delta === 0;
+  if (delta !== 0) {
+    el('deltaValue').textContent = (delta < 0 ? '−' : '+') + duration(Math.abs(delta));
+    el('delta').dataset.sign = delta < 0 ? 'minus' : 'plus';
+  }
   el('speaker').textContent = speaker;
   el('clock').textContent = clock;
   el('clock').classList.toggle('over', rem <= -15000);
@@ -155,8 +165,8 @@ function render() {
     miniUI.clock.textContent = clock;
     miniUI.clock.classList.toggle('over', rem <= -15000);
     miniUI.message.textContent = barNotice || (closing ? countdown : over && !paused ? '시간 초과' : status);
-    barButton(miniUI.run, runLabel, running ? 'Ⅱ' : '▶');
-    barButton(miniUI.next, nextLabel, nextLabel === '종료' ? '■' : '▸|');
+    setIconButton(miniUI.run, runLabel, running ? 'pause' : 'play');
+    setIconButton(miniUI.next, nextLabel, nextLabel === '종료' ? 'stop' : 'skip');
     miniUI.next.disabled = !running;
     miniUI.undo.disabled = !previous;
     miniUI.fill.style.width = progress;
@@ -244,7 +254,10 @@ async function openBar() {
     miniUI.run.onclick = () => toggle(host);
     miniUI.next.onclick = () => advance(host);
     miniUI.undo.onclick = undo;
-    action('back').onclick = () => host.close();
+    setIconButton(miniUI.undo, '되돌리기', 'undo');
+    const back = action('back');
+    setIconButton(back, '기본 창으로 돌아가기', 'back');
+    back.onclick = () => host.close();
     doc.addEventListener('keydown', shortcuts);
     doc.querySelector('.miniBar').ondblclick = event => {
       if (!event.target.closest('button')) host.close();

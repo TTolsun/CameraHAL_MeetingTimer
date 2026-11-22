@@ -12,9 +12,10 @@
 <body>
   <main class="timer" aria-label="회의 타이머">
     <header class="strip">
-      <span>현재 <time id="now"></time></span>
-      <b id="delta" title="첫 발표 배정 시간과의 차이"></b>
-      <span>종료 <time id="deadline"></time></span><span id="left"></span>
+      <span class="strip-now">현재 <time id="now"></time></span>
+      <span class="strip-delta" id="delta" title="첫 발표 배정 시간과의 차이" hidden>계획 대비 <b id="deltaValue"></b></span>
+      <span class="strip-end">종료 <time id="deadline"></time></span>
+      <span id="left"></span>
     </header>
     <section class="stage" aria-label="현재 발표">
       <div class="stage-head"><h1 id="speaker"></h1><span id="status"></span></div>
@@ -28,9 +29,8 @@
         <button id="undo" disabled>되돌리기</button><button id="edit">설정</button>
       </div>
       <div class="tools">
-        <button id="light" aria-label="밝은 화면" title="밝은 화면">☀</button>
-        <button id="dark" aria-label="어두운 화면" title="어두운 화면">☾</button>
-        <button id="mini" aria-label="발표 막대 열기" title="발표 막대 열기 (B)"><i class="bar-icon"></i></button>
+        <button id="theme" class="icon-button"></button>
+        <button id="mini" aria-keyshortcuts="B" title="발표 막대 열기 (B)">발표 막대 열기</button>
       </div>
     </footer>
   </main>
@@ -39,12 +39,24 @@
       <b class="count"></b><div class="slots" aria-label="발표 순서"></div>
       <span class="miniClock" role="timer"></span><span class="message"></span>
       <div class="controls">
-        <button class="primary" data-action="run"></button><button class="ink" data-action="next"></button>
-        <button data-action="undo" title="되돌리기" aria-label="되돌리기">↶</button>
-        <button data-action="back" title="기본 창으로 돌아가기" aria-label="기본 창으로 돌아가기">▣</button>
+        <button class="primary icon-button" data-action="run" aria-keyshortcuts="Space"></button>
+        <button class="ink icon-button" data-action="next" aria-keyshortcuts="N ArrowRight"></button>
+        <button class="icon-button" data-action="undo" aria-keyshortcuts="Control+Z"></button>
+        <button class="icon-button" data-action="back" aria-keyshortcuts="B Escape"></button>
       </div>
       <div class="track"><i></i></div>
     </main>
+  </template>
+  <template id="icons">
+    <svg data-icon="play" viewBox="0 0 24 24"><path d="m8 5 12 7-12 7Z" fill="currentColor"/></svg>
+    <svg data-icon="pause" viewBox="0 0 24 24"><path d="M9 5v14m6-14v14" stroke-width="3"/></svg>
+    <svg data-icon="skip" viewBox="0 0 24 24"><path d="m5 5 11 7-11 7Z" fill="currentColor"/><path d="M19 5v14"/></svg>
+    <svg data-icon="stop" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="1" fill="currentColor"/></svg>
+    <svg data-icon="undo" viewBox="0 0 24 24"><path d="M9 5 4 10l5 5m-5-5h10a5 5 0 0 1 0 10h-3"/></svg>
+    <svg data-icon="back" viewBox="0 0 24 24"><path d="M8 9V5a1 1 0 0 1 1-1h11a1 1 0 0 1 1 1v14a1 1 0 0 1-1 1H9a1 1 0 0 1-1-1v-2M8 8h13M3 13h11m-3-3 3 3-3 3"/></svg>
+    <svg data-icon="sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M5 5l1.5 1.5m11 11L19 19M19 5l-1.5 1.5m-11 11L5 19"/></svg>
+    <svg data-icon="moon" viewBox="0 0 24 24"><path d="M20.3 15.1A9 9 0 0 1 8.9 3.7 9 9 0 1 0 20.3 15.1Z"/></svg>
+    <svg data-icon="bar" viewBox="0 0 24 24"><rect x="3" y="7" width="18" height="10" rx="2"/><path d="M7 12h4m4 0h2"/></svg>
   </template>
   <dialog id="settings" aria-labelledby="settingsTitle"><form id="settingsForm">
     <h2 id="settingsTitle">회의 설정</h2>
