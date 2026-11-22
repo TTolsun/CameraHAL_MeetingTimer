@@ -160,6 +160,7 @@ function render() {
     miniUI.count.textContent = (state.index + 1) + ' / ' + state.count + '명';
     miniUI.clock.textContent = clock;
     miniUI.clock.classList.toggle('over', rem <= -15000);
+    miniUI.clock.classList.toggle('wide', clock.length > 5);
     const message = barNotice || (paused ? '일시정지' : over ? '시간 초과' : '');
     if (miniUI.message.textContent !== message) miniUI.message.textContent = message;
     setIconButton(miniUI.run, runLabel, running ? 'pause' : 'play');
@@ -217,6 +218,13 @@ el('settingsForm').onsubmit = event => {
 // Only the dedicated extension popup belongs to the timer. A regular browser
 // window can contain other tabs and must stay under the user's control.
 const owner = extensionWindow ? chrome.windows.getCurrent() : Promise.resolve(null);
+const resetSize = el('resetSize');
+setIconButton(resetSize, '기본 크기로 복원', 'reset-size');
+owner.then(popup => { resetSize.hidden = popup?.type !== 'popup'; }).catch(() => {});
+resetSize.onclick = async () => {
+  const restored = await chrome.runtime.sendMessage({action: 'reset-timer-size'}).catch(() => false);
+  if (!restored) notify('창 크기를 복원할 수 없습니다.');
+};
 let transition = Promise.resolve();
 async function openBar() {
   const button = el('mini');
@@ -226,9 +234,13 @@ async function openBar() {
   let host;
   try {
     const width = 328;
-    host = window.documentPictureInPicture
-      ? await documentPictureInPicture.requestWindow({width, height: 92, disallowReturnToOpener: true})
-      : window.open('', 'meeting-timer-bar', 'popup,width=' + width + ',height=48');
+    const pictureInPicture = window.documentPictureInPicture;
+    host = pictureInPicture
+      ? await pictureInPicture.requestWindow({
+        width, height: 92, disallowReturnToOpener: true, preferInitialWindowPlacement: true
+      })
+      : window.open('', 'meeting-timer-bar',
+        'popup,width=' + width + ',height=' + (Math.max(88, window.outerHeight - window.innerHeight) + 40));
     if (!host) throw new Error('Popup blocked');
     mini = host;
     const doc = host.document;
@@ -253,6 +265,25 @@ async function openBar() {
     const back = action('back');
     setIconButton(back, '기본 창으로 돌아가기', 'back');
     back.onclick = () => host.close();
+    const reset = action('reset');
+    // Document Picture-in-Picture accepted user-initiated resizing starting in Chrome 121.
+    const chromeMajor = Number(navigator.userAgent.match(/\bChrome\/(\d+)/)?.[1] ?? Infinity);
+    if (!pictureInPicture || chromeMajor >= 121) {
+      // Older PiP versions can open at the last used bounds. Use their frame
+      // insets to derive a compact target even when the window reopens large.
+      const defaults = pictureInPicture && chromeMajor < 130
+        ? {width: width + host.outerWidth - host.innerWidth, height: 38 + host.outerHeight - host.innerHeight}
+        : {width: host.outerWidth, height: host.outerHeight};
+      setIconButton(reset, '기본 크기로 복원', 'reset-size');
+      const updateReset = () => {
+        const atDefault = Math.abs(host.outerWidth - defaults.width) <= 2 && Math.abs(host.outerHeight - defaults.height) <= 2;
+        if (atDefault && doc.activeElement === reset) back.focus();
+        reset.hidden = atDefault;
+      };
+      host.addEventListener('resize', updateReset);
+      reset.onclick = () => host.resizeTo(defaults.width, defaults.height);
+      updateReset();
+    }
     doc.addEventListener('keydown', shortcuts);
     doc.querySelector('.miniBar').ondblclick = event => {
       if (!event.target.closest('button')) host.close();
