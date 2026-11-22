@@ -4,8 +4,17 @@
 
 ## 실행 방법
 
-- **Windows** — `MeetingTimer-Windows.zip`을 폴더에 풀고 `MeetingTimer.bat`을 더블클릭하세요. 압축을 푼 파일은 같은 폴더에 두세요. Windows PowerShell 5.1로 실행되며 설정은 같은 폴더의 `config.json`에 저장됩니다.
-- **Chrome** — `MeetingTimer-Chrome.zip`을 보관할 폴더에 풀고 데스크톱 Chrome 116 이상에서 `chrome://extensions`를 여세요. **개발자 모드 → 압축해제된 확장 프로그램 로드**를 누르고 `manifest.json`이 들어 있는 폴더를 선택하세요. 도구 모음에서 **회의 타이머**를 누르면 실행됩니다.
+### Windows에서 실행
+
+[Windows용 ZIP](https://github.com/TTolsun/CameraHAL_MeetingTimer/releases/latest/download/MeetingTimer-Windows.zip)을 폴더에 풀고 `MeetingTimer.bat`을 더블클릭하세요. 압축을 푼 파일은 같은 폴더에 두세요. Windows PowerShell 5.1로 실행되며 설정은 같은 폴더의 `config.json`에 저장됩니다.
+
+### Chrome 확장 프로그램 설치
+
+1. [Chrome용 ZIP 다운로드](https://github.com/TTolsun/CameraHAL_MeetingTimer/releases/latest/download/MeetingTimer-Chrome.zip)를 누르세요. 압축은 그대로 두세요.
+2. 데스크톱 Chrome 116 이상에서 주소창에 `chrome://extensions`를 입력하고 오른쪽 위의 **개발자 모드**를 켜세요.
+3. 다운로드 폴더에서 `MeetingTimer-Chrome.zip`을 확장 프로그램 페이지로 끌어다 놓으세요. 설치되면 도구 모음의 **확장 프로그램**(퍼즐 아이콘)에서 **회의 타이머**를 눌러 실행하세요. 옆의 핀을 누르면 다음부터 도구 모음에서 바로 열 수 있습니다.
+
+끌어다 놓아도 설치되지 않으면 ZIP을 보관할 폴더에 풀고 **압축해제된 확장 프로그램을 로드합니다**를 눌러 `manifest.json`이 들어 있는 폴더를 선택하세요. 회사 정책으로 개발자 모드가 잠겨 있다면 사내 Chrome 관리자에게 설치를 요청하세요.
 
 Chrome에서는 기본 창 아래 한 줄에 시작·일시정지, 다음, 되돌리기, 회의 설정, **발표 막대 열기** 버튼이 있습니다. 테마를 바꾸려면 회의 설정에서 해·달 버튼을 누르세요. 첫 발표가 시작된 뒤 다른 발표자의 배정 시간이 처음 계획과 달라지면 기본 창 상단에 **계획 대비** 변경량이 표시됩니다.
 
