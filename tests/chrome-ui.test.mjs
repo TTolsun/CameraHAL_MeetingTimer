@@ -225,8 +225,8 @@ test('presenter bar replaces the visible popup and restores the same meeting', {
   await open();
   const barSize = () => run('[mini.outerWidth, mini.outerHeight]');
   const initialBarSize = await barSize();
-  const fitsBarSize = (actual, expected) => actual.every((value, axis) => Math.abs(value - expected[axis]) <= 2);
-  const defaultBarSize = async () => fitsBarSize(await barSize(), initialBarSize);
+  const matchesSize = (actual, expected) => actual.every((value, axis) => Math.abs(value - expected[axis]) <= 2);
+  const defaultBarSize = async () => matchesSize(await barSize(), initialBarSize);
   assert.ok(await run("mini.document.querySelector('[data-action=reset]').hidden"));
   async function assertBarLayout() {
     await until(() => run("mini.getComputedStyle(mini.document.querySelector('.miniBar')).display === 'grid'"));
@@ -289,22 +289,49 @@ test('presenter bar replaces the visible popup and restores the same meeting', {
   await assertBarLayout();
   await evaluate(worker, 'openTimer()');
   await restored();
+  await run(`history.replaceState(null, '', '#timer-resize');
+    chrome.runtime.sendMessage = () => { throw new Error('Size reset must not contact the service worker'); };`);
   await click('#resetSize');
   await until(async () => String(await popupSize()) === String(initialPopupSize));
   assert.equal(await run("el('status').textContent"), '일시정지');
+  assert.ok(await run("!el('notice').textContent.includes('창 크기를 복원할 수 없습니다')"));
   await run("void Object.defineProperty(window, 'documentPictureInPicture', {configurable: true, value: undefined})");
   await click('#mini');
   await until(async () => await popupState() === 'minimized' && await run('!!miniUI'));
   const fallbackBarSize = await barSize();
   await assertBarLayout();
-  await run('mini.resizeBy(110, 80)');
+  await evaluate(worker, `chrome.windows.getAll().then(windows => {
+    const fallback = windows.find(window => window.type === 'popup' && window.id !== ${popupId});
+    return chrome.windows.update(fallback.id, {width: 460, height: 220});
+  })`);
   await until(() => run("!mini.document.querySelector('[data-action=reset]').hidden"));
   await barClick('reset');
-  await until(async () => fitsBarSize(await barSize(), fallbackBarSize));
+  await until(async () => matchesSize(await barSize(), fallbackBarSize));
   await assertBarLayout();
   await barClick('back');
   await restored();
   await run('delete window.documentPictureInPicture');
+  const resizeUrl = await run("chrome.runtime.getURL('index.html?resize-test=1')");
+  await call('Page.navigate', {url: resizeUrl}, page);
+  await until(() => run("location.search === '?resize-test=1' && document.readyState === 'complete' && !el('resetSize').hidden"));
+  await evaluate(worker, 'chrome.windows.update(' + popupId + ', {state: "maximized"})');
+  await until(async () => await popupState() === 'maximized' && await run('outerWidth > ' + initialPopupSize[0]));
+  await click('#resetSize');
+  await until(async () => await popupState() === 'normal' && String(await popupSize()) === String(initialPopupSize));
+  assert.equal(await run("el('status').textContent"), '일시정지');
+  await evaluate(worker, 'chrome.windows.update(' + popupId + ', {width: 616, height: 450})');
+  await until(() => run('outerWidth > 500 && outerHeight > 400'));
+  await run(`const nativeWindowUpdate = chrome.windows.update;
+    let rejectedWindowUpdates = 0;
+    chrome.windows.update = () => {
+      rejectedWindowUpdates++;
+      return Promise.reject(new Error('Simulated Chrome window API failure'));
+    };`);
+  await click('#resetSize');
+  await until(() => run("rejectedWindowUpdates === 1 && !el('resetSize').disabled"));
+  await until(async () => matchesSize(await popupSize(), initialPopupSize));
+  assert.ok(await run("!el('notice').textContent.includes('창 크기를 복원할 수 없습니다')"));
+  await run('chrome.windows.update = nativeWindowUpdate');
   await click('#edit');
   await run("el('countInput').value = 3");
   dialogAnswers.push(false);
@@ -332,5 +359,16 @@ test('presenter bar replaces the visible popup and restores the same meeting', {
   await until(() => run("innerHeight === 154"));
   await run("el('edit').click()");
   await assertSettingsControls();
+  const regularTab = await evaluate(worker, `chrome.windows.getAll().then(windows => chrome.tabs.create({
+    windowId: windows.find(popup => popup.type === 'normal').id,
+    url: chrome.runtime.getURL('index.html#regular-test'), active: false
+  }))`);
+  const regularPage = await attach('/index.html#regular-test');
+  await until(() => evaluate(regularPage, "document.readyState === 'complete' && !!el('resetSize').onclick"));
+  const regularSize = await evaluate(regularPage, '[outerWidth, outerHeight]');
+  assert.ok(await evaluate(regularPage, "el('resetSize').hidden"));
+  await evaluate(regularPage, "el('resetSize').click()");
+  assert.deepEqual(await evaluate(regularPage, '[outerWidth, outerHeight]'), regularSize);
+  await evaluate(worker, 'chrome.tabs.remove(' + regularTab.id + ')');
   await call('Browser.close', {});
 });

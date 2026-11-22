@@ -1,19 +1,6 @@
 'use strict';
 
-const timerBounds = {width: 380, height: 290};
-
-chrome.runtime.onMessage.addListener((message, sender, reply) => {
-  if (message?.action !== 'reset-timer-size' || sender.url !== chrome.runtime.getURL('index.html') || !sender.tab) return;
-  async function restoreSize() {
-    const popup = await chrome.windows.get(sender.tab.windowId);
-    if (popup.type !== 'popup') return false;
-    if (popup.state !== 'normal') await chrome.windows.update(popup.id, {state: 'normal'});
-    await chrome.windows.update(popup.id, timerBounds);
-    return true;
-  }
-  restoreSize().then(reply, () => reply(false));
-  return true;
-});
+importScripts('window-size.js');
 
 async function openTimer() {
   const url = chrome.runtime.getURL('index.html');
