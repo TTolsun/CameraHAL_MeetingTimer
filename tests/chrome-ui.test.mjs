@@ -78,15 +78,20 @@ test('presenter bar replaces the visible popup and restores the same meeting', {
   const run = expression => evaluate(page, expression);
   await until(() => run("document.readyState === 'complete' && !!document.querySelector('#run').onclick"));
   async function click(selector) {
-    const point = await run(`(() => {
+    const hit = await run(`(() => {
       const element = document.querySelector(${JSON.stringify(selector)});
       const box = element.getBoundingClientRect();
       const x = box.x + box.width / 2, y = box.y + box.height / 2;
-      return !element.disabled && element.contains(document.elementFromPoint(x, y)) && {x,y};
+      const target = document.elementFromPoint(x, y);
+      if (element.disabled || !element.contains(target)) {
+        return {hidden: element.hidden, disabled: element.disabled, target: target?.outerHTML.slice(0, 150),
+          box: box.toJSON(), viewport: [innerWidth, innerHeight]};
+      }
+      return {point: {x, y}};
     })()`);
-    assert.ok(point, selector + ' must be visible, enabled and reachable');
+    assert.ok(hit.point, selector + ' must be visible, enabled and reachable: ' + JSON.stringify(hit));
     for (const type of ['mousePressed', 'mouseReleased']) {
-      await call('Input.dispatchMouseEvent', {type, ...point, button: 'left', clickCount: 1}, page);
+      await call('Input.dispatchMouseEvent', {type, ...hit.point, button: 'left', clickCount: 1}, page);
     }
   }
   async function barClick(action) {
@@ -135,23 +140,13 @@ test('presenter bar replaces the visible popup and restores the same meeting', {
   const undoX = await run("el('undo').getBoundingClientRect().x");
   assert.ok(await run("el('delta').hidden"));
   const deadlineX = await run("el('deadline').getBoundingClientRect().x");
-  await run("const getActualTime = Date.now; const testStart = Date.now(); Date.now = () => testStart");
   await click('#run');
   assert.equal(await run("el('undo').getBoundingClientRect().x"), undoX);
   assert.ok(await run("el('delta').hidden && state.plan === state.budget"));
-  await run("Date.now = () => testStart + 5000");
+  await until(() => run("Date.now() - state.started >= 1000"));
   await click('#next');
-  await run("Date.now = getActualTime");
   assert.match(await run("el('delta').hidden ? '' : el('delta').textContent"), /^계획 대비 \+\d+:\d{2}$/);
   assert.equal(await run("el('deadline').getBoundingClientRect().x"), deadlineX);
-  await call('Emulation.setDeviceMetricsOverride', {width: 280, height: 260, deviceScaleFactor: 1, mobile: false}, page);
-  assert.ok(await run(`(() => {
-    const delta = el('delta').getBoundingClientRect();
-    const left = el('left').getBoundingClientRect();
-    return innerWidth === 280 && document.documentElement.scrollWidth === innerWidth &&
-      delta.right <= left.left && delta.y > el('deadline').getBoundingClientRect().y;
-  })()`));
-  await call('Emulation.clearDeviceMetricsOverride', {}, page);
   assert.equal(await run("el('next').textContent"), '종료');
   await call('Input.dispatchKeyEvent', {type: 'keyDown', key: ' ', code: 'Space', windowsVirtualKeyCode: 32}, page);
   await call('Input.dispatchKeyEvent', {type: 'keyUp', key: ' ', code: 'Space', windowsVirtualKeyCode: 32}, page);
@@ -220,5 +215,15 @@ test('presenter bar replaces the visible popup and restores the same meeting', {
   await click('button[type=submit]');
   assert.ok(await run("!settings.open && el('status').textContent === '대기' && el('segments').children.length === 3"));
   assert.equal(dialogAnswers.length, 0, 'Both confirmation choices were exercised');
+  // Keep device emulation after the native popup input and PiP checks.
+  await run("state = {...state, index: 1, plan: 10 * minute, budget: 12 * minute}; render()");
+  await call('Emulation.setDeviceMetricsOverride', {width: 280, height: 260, deviceScaleFactor: 1, mobile: false}, page);
+  await until(() => run("innerWidth === 280"));
+  assert.ok(await run(`(() => {
+    const delta = el('delta').getBoundingClientRect();
+    const left = el('left').getBoundingClientRect();
+    return !el('delta').hidden && document.documentElement.scrollWidth === innerWidth &&
+      delta.right <= left.left && delta.y > el('deadline').getBoundingClientRect().y;
+  })()`), 'The narrow timer must fit the visible plan comparison and time remaining');
   await call('Browser.close', {});
 });
