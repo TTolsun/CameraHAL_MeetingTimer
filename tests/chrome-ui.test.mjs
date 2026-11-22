@@ -229,6 +229,7 @@ test('presenter bar replaces the visible popup and restores the same meeting', {
   const defaultBarSize = async () => fitsBarSize(await barSize(), initialBarSize);
   assert.ok(await run("mini.document.querySelector('[data-action=reset]').hidden"));
   async function assertBarLayout() {
+    await until(() => run("mini.getComputedStyle(mini.document.querySelector('.miniBar')).display === 'grid'"));
     const layout = await run(`(() => {
       const doc = mini.document;
       const bar = doc.querySelector('.miniBar');

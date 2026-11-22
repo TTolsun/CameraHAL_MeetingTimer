@@ -107,7 +107,7 @@ input { display: block; width: 100%; min-height: 28px; padding: 2px 4px; margin-
 .dialogActions button { white-space: nowrap; padding-inline: 8px; }
 .miniBar {
   display: grid; grid-template-columns: 52px minmax(0, 1fr) auto;
-  align-items: center; min-height: 100dvh; padding: 2px 8px 5px; gap: 6px;
+  align-items: center; min-height: 100dvh; padding: 1px 8px 4px; gap: 6px;
   background: var(--strip); color: white;
 }
 .barState { min-width: 0; white-space: nowrap; }
