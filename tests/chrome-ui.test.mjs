@@ -101,8 +101,21 @@ test('presenter bar replaces the visible popup and restores the same meeting', {
   }
   const viewport = await run('({height: innerHeight, content: document.documentElement.scrollHeight})');
   assert.ok(viewport.content <= viewport.height, 'Default timer must fit: ' + JSON.stringify(viewport));
-  await click('#dark');
-  await click('#light');
+  async function assertIcon(selector, label, icon, doc = 'document') {
+    assert.deepEqual(await run(`(() => {
+      const button = ${doc}.querySelector(${JSON.stringify(selector)});
+      const svg = button.querySelector('svg');
+      return [button.getAttribute('aria-label'), svg?.dataset.icon, svg?.getAttribute('aria-hidden')];
+    })()`), [label, icon, 'true']);
+  }
+  assert.ok(await run("el('mini').textContent.trim() === '발표 막대 열기' && !!el('mini').querySelector('svg[data-icon=bar]')"));
+  await assertIcon('#theme', '어두운 화면으로 전환', 'moon');
+  await click('#theme');
+  assert.equal(await run("localStorage.getItem('timer-theme')"), 'dark');
+  await call('Page.reload', {}, page);
+  await until(() => run("document.readyState === 'complete' && document.documentElement.dataset.theme === 'dark'"));
+  await assertIcon('#theme', '밝은 화면으로 전환', 'sun');
+  await click('#theme');
   assert.equal(await run("document.documentElement.dataset.theme"), 'light');
   await click('#edit');
   await run("el('countInput').value = 49");
@@ -120,9 +133,25 @@ test('presenter bar replaces the visible popup and restores the same meeting', {
   await click('button[type=submit]');
   assert.ok(await run("!settings.open && el('segments').children.length === 2 && el('undo').disabled"));
   const undoX = await run("el('undo').getBoundingClientRect().x");
+  assert.ok(await run("el('delta').hidden"));
+  const deadlineX = await run("el('deadline').getBoundingClientRect().x");
+  await run("const getActualTime = Date.now; const testStart = Date.now(); Date.now = () => testStart");
   await click('#run');
   assert.equal(await run("el('undo').getBoundingClientRect().x"), undoX);
+  assert.ok(await run("el('delta').hidden && state.plan === state.budget"));
+  await run("Date.now = () => testStart + 5000");
   await click('#next');
+  await run("Date.now = getActualTime");
+  assert.match(await run("el('delta').hidden ? '' : el('delta').textContent"), /^계획 대비 \+\d+:\d{2}$/);
+  assert.equal(await run("el('deadline').getBoundingClientRect().x"), deadlineX);
+  await call('Emulation.setDeviceMetricsOverride', {width: 280, height: 260, deviceScaleFactor: 1, mobile: false}, page);
+  assert.ok(await run(`(() => {
+    const delta = el('delta').getBoundingClientRect();
+    const left = el('left').getBoundingClientRect();
+    return innerWidth === 280 && document.documentElement.scrollWidth === innerWidth &&
+      delta.right <= left.left && delta.y > el('deadline').getBoundingClientRect().y;
+  })()`));
+  await call('Emulation.clearDeviceMetricsOverride', {}, page);
   assert.equal(await run("el('next').textContent"), '종료');
   await call('Input.dispatchKeyEvent', {type: 'keyDown', key: ' ', code: 'Space', windowsVirtualKeyCode: 32}, page);
   await call('Input.dispatchKeyEvent', {type: 'keyUp', key: ' ', code: 'Space', windowsVirtualKeyCode: 32}, page);
@@ -130,13 +159,14 @@ test('presenter bar replaces the visible popup and restores the same meeting', {
   await click('#run');
   await click('#next');
   assert.ok(await run("el('notice').textContent.includes('회의 종료') && el('next').hidden"));
+  assert.ok(await run("el('delta').hidden"));
   await click('#undo');
   assert.equal(await run("el('speaker').textContent"), '발표자 2');
   if (process.env.TIMER_SCREENSHOT) {
     const shot = await call('Page.captureScreenshot', {format: 'png'}, page);
     await writeFile(process.env.TIMER_SCREENSHOT, Buffer.from(shot.data, 'base64'));
   }
-  await click('#dark');
+  await click('#theme');
   const popupId = await run('chrome.windows.getCurrent().then(w => w.id)');
   const popupState = () => evaluate(worker, 'chrome.windows.get(' + popupId + ').then(w => w.state)');
   const open = async () => {
@@ -149,10 +179,16 @@ test('presenter bar replaces the visible popup and restores the same meeting', {
   };
   await open();
   assert.equal(await run('mini.document.documentElement.dataset.theme'), 'dark');
+  await assertIcon('[data-action=run]', '일시정지', 'pause', 'mini.document');
+  await assertIcon('[data-action=next]', '종료', 'stop', 'mini.document');
+  await assertIcon('[data-action=undo]', '되돌리기', 'undo', 'mini.document');
+  await assertIcon('[data-action=back]', '기본 창으로 돌아가기', 'back', 'mini.document');
   const initialClock = await run('miniUI.clock.textContent');
   await until(async () => await run('miniUI.clock.textContent') !== initialClock);
   await barClick('next');
   assert.ok(await run("miniUI.message.textContent.includes('회의 종료')"));
+  await assertIcon('[data-action=run]', '시작', 'play', 'mini.document');
+  await assertIcon('[data-action=next]', '다음', 'skip', 'mini.document');
   await barClick('undo');
   await barClick('run');
   assert.equal(await run("miniUI.count.textContent + ' ' + miniUI.message.textContent"), '2 / 2명 일시정지');

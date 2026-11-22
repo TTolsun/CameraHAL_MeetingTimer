@@ -39,13 +39,20 @@ button:disabled { opacity: .48; cursor: default; }
 button:focus-visible, input:focus-visible { outline: 2px solid #579aff; outline-offset: 2px; }
 .primary { color: var(--primary-ink); background: var(--primary); border-color: var(--primary); }
 .ink { color: white; background: #1a1a1a; border-color: #474747; }
-.timer { display: grid; grid-template-rows: 36px minmax(0, 1fr) auto; height: 100dvh; }
-.strip { display: flex; align-items: center; gap: 10px; padding: 0 16px; color: #c2c2c2; background: var(--strip); font-size: 12px; white-space: nowrap; }
+.timer { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; height: 100dvh; }
+.strip {
+  display: grid; grid-template-columns: auto 1fr auto auto; grid-template-areas: "now delta end left";
+  align-items: center; column-gap: 8px; min-height: 36px; padding: 0 12px;
+  color: #c2c2c2; background: var(--strip); font-size: 12px; white-space: nowrap;
+}
+.strip-now { grid-area: now; }
+.strip-delta { grid-area: delta; text-align: center; }
+.strip-end { grid-area: end; }
+#left { grid-area: left; }
 .strip time, .strip b { font: 600 14px "Segoe UI", sans-serif; font-variant-numeric: tabular-nums; }
-.strip time { margin-left: 3px; color: white; }
-#delta { flex: 1; text-align: center; }
-#delta[data-sign="plus"] { color: #8fb4ff; }
-#delta[data-sign="minus"], #left.warn { color: #ff7070; }
+.strip time, .strip b { margin-left: 2px; color: white; }
+#delta[data-sign="plus"] b { color: #8fb4ff; }
+#delta[data-sign="minus"] b, #left.warn { color: #ff8080; }
 .stage { display: grid; grid-template-rows: auto 1fr auto 3px; gap: 6px; padding: 14px 20px 6px; text-align: center; container-type: size; }
 .stage-head, .actions, .tools, .controls, .dialogActions, .slots { display: flex; align-items: center; }
 .stage-head { justify-content: space-between; }
@@ -68,16 +75,26 @@ footer { padding: 10px 16px; border-top: 1px solid var(--hair); background: var(
 #next[hidden] { display: inline-block; visibility: hidden; }
 #edit { margin-left: auto; }
 .tools, .dialogActions { justify-content: flex-end; gap: 4px; margin-top: 8px; }
-.tools button, .controls button { display: grid; place-items: center; width: 32px; height: 32px; padding: 0; font: 18px "Segoe UI Symbol", sans-serif; }
-.tools button[aria-pressed="true"] { background: var(--hair); }
+.icon-button { display: grid; place-items: center; width: 32px; height: 32px; padding: 0; }
+#mini { display: inline-flex; align-items: center; justify-content: center; gap: 5px; }
+button svg {
+  width: 18px; height: 18px; fill: none; stroke: currentColor;
+  stroke-width: 2; stroke-linecap: round; stroke-linejoin: round;
+}
 @media (max-height: 280px) {
-  .timer { grid-template-rows: 30px minmax(0, 1fr) auto; }
+  .strip { min-height: 30px; }
   .stage { padding-block: 5px; gap: 2px; }
   footer { padding-block: 5px; }
   .tools { margin-top: 4px; }
 }
-.bar-icon { width: 17px; height: 8px; border: 1.6px solid currentColor; border-radius: 2px; position: relative; }
-.bar-icon::after { content: ""; position: absolute; left: 2px; right: 6px; bottom: 1px; border-bottom: 2px solid currentColor; }
+@media (max-width: 365px) {
+  .strip {
+    grid-template-columns: 1fr auto; grid-template-areas: "now end" "delta left";
+    grid-template-rows: 20px 18px; padding: 2px 8px;
+  }
+  .strip-delta { text-align: left; }
+  .strip-end, #left { justify-self: end; }
+}
 dialog { width: min(340px, 95vw); padding: 20px; border: 1px solid var(--line); border-radius: 8px; color: var(--ink); background: var(--paper); }
 dialog::backdrop { background: #0006; }
 dialog h2 { margin: 0; font-size: 18px; }
