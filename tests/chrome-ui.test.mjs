@@ -318,16 +318,20 @@ test('presenter bar replaces the visible popup and restores the same meeting', {
   await until(async () => await popupState() === 'maximized' && await run('outerWidth > ' + initialPopupSize[0]));
   await click('#resetSize');
   await until(async () => await popupState() === 'normal' && String(await popupSize()) === String(initialPopupSize));
+  await until(() => run("!el('resetSize').disabled"));
   assert.equal(await run("el('status').textContent"), '일시정지');
   await evaluate(worker, 'chrome.windows.update(' + popupId + ', {width: 616, height: 450})');
-  await until(() => run('outerWidth > 500 && outerHeight > 400'));
+  await until(async () => await popupState() === 'normal' &&
+    matchesSize(await popupSize(), [616, 450]) &&
+    matchesSize(await run('[outerWidth, outerHeight]'), [616, 450]));
   await run(`const nativeWindowUpdate = chrome.windows.update;
     let rejectedWindowUpdates = 0;
     chrome.windows.update = () => {
       rejectedWindowUpdates++;
       return Promise.reject(new Error('Simulated Chrome window API failure'));
     };`);
-  await click('#resetSize');
+  // Exercise the failure branch with a user gesture independent of OS input coordinates.
+  await run("el('resetSize').click()");
   await until(() => run("rejectedWindowUpdates === 1 && !el('resetSize').disabled"));
   await until(async () => matchesSize(await popupSize(), initialPopupSize));
   assert.ok(await run("!el('notice').textContent.includes('창 크기를 복원할 수 없습니다')"));
