@@ -19,7 +19,7 @@ async function openTimer() {
       // The timer window may have been closed between discovery and focus.
     }
   }
-  await chrome.windows.create({url, type: 'popup', width: 396, height: 374, focused: true});
+  await chrome.windows.create({url, type: 'popup', width: 380, height: 290, focused: true});
 }
 
 let opening;

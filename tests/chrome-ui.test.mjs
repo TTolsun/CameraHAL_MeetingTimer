@@ -106,6 +106,30 @@ test('presenter bar replaces the visible popup and restores the same meeting', {
   }
   const viewport = await run('({height: innerHeight, content: document.documentElement.scrollHeight})');
   assert.ok(viewport.content <= viewport.height, 'Default timer must fit: ' + JSON.stringify(viewport));
+  async function assertActionRow() {
+    const layout = await run(`(() => {
+      const boxes = Array.from(document.querySelectorAll('.actions button'), button => button.getBoundingClientRect());
+      return {singleRow: boxes.every(box => Math.abs((box.top + box.bottom) / 2 - (boxes[0].top + boxes[0].bottom) / 2) < 1),
+        width: innerWidth, height: innerHeight, right: boxes.at(-1).right, bottom: Math.max(...boxes.map(box => box.bottom))};
+    })()`);
+    assert.ok(layout.singleRow && layout.right <= layout.width && layout.bottom <= layout.height,
+      'All timer actions must fit on one row: ' + JSON.stringify(layout));
+  }
+  await assertActionRow();
+  async function assertStageFits() {
+    const layout = await run(`(() => {
+      const footer = document.querySelector('.actions').getBoundingClientRect();
+      const frame = document.querySelector('.clockFrame').getBoundingClientRect();
+      const clock = el('clock').getBoundingClientRect();
+      const segments = el('segments').getBoundingClientRect();
+      return {footerTop: footer.top, segmentsBottom: segments.bottom, frameTop: frame.top, frameBottom: frame.bottom,
+        clockTop: clock.top, clockBottom: clock.bottom, clockLeft: clock.left, clockRight: clock.right, width: innerWidth};
+    })()`);
+    assert.ok(layout.segmentsBottom <= layout.footerTop && layout.clockTop >= layout.frameTop &&
+      layout.clockBottom <= layout.frameBottom && layout.clockLeft >= 0 && layout.clockRight <= layout.width,
+      'The clock and progress segments must fit above the actions: ' + JSON.stringify(layout));
+  }
+  await assertStageFits();
   async function assertIcon(selector, label, icon, doc = 'document') {
     assert.deepEqual(await run(`(() => {
       const button = ${doc}.querySelector(${JSON.stringify(selector)});
@@ -114,15 +138,35 @@ test('presenter bar replaces the visible popup and restores the same meeting', {
     })()`), [label, icon, 'true']);
   }
   assert.ok(await run("el('mini').textContent.trim() === '발표 막대 열기' && !!el('mini').querySelector('svg[data-icon=bar]')"));
+  await assertIcon('#edit', '회의 설정', 'settings');
+  async function assertSettingsControls() {
+    assert.equal(await run('document.activeElement?.id'), 'endInput', 'Settings must open with the end-time input focused');
+    const layout = await run(`(() => {
+      const dialog = el('settings');
+      const bounds = dialog.getBoundingClientRect();
+      const buttons = Array.from(dialog.querySelectorAll('.dialogActions button'), button => {
+        const box = button.getBoundingClientRect();
+        const hit = document.elementFromPoint((box.left + box.right) / 2, (box.top + box.bottom) / 2);
+        return {name: button.textContent, top: box.top, bottom: box.bottom, hit: button.contains(hit)};
+      });
+      return {height: innerHeight, dialogBottom: bounds.bottom, clientHeight: dialog.clientHeight,
+        scrollHeight: dialog.scrollHeight, buttons};
+    })()`);
+    assert.ok(layout.buttons.every(button => button.hit && button.top >= 0 &&
+      button.bottom <= Math.min(layout.height, layout.dialogBottom)),
+      'Settings buttons must be fully reachable without scrolling: ' + JSON.stringify(layout));
+  }
+  await click('#edit');
+  await assertSettingsControls();
   await assertIcon('#theme', '어두운 화면으로 전환', 'moon');
   await click('#theme');
   assert.equal(await run("localStorage.getItem('timer-theme')"), 'dark');
   await call('Page.reload', {}, page);
   await until(() => run("document.readyState === 'complete' && document.documentElement.dataset.theme === 'dark'"));
+  await click('#edit');
   await assertIcon('#theme', '밝은 화면으로 전환', 'sun');
   await click('#theme');
   assert.equal(await run("document.documentElement.dataset.theme"), 'light');
-  await click('#edit');
   await run("el('countInput').value = 49");
   await click('#cancel');
   await click('#edit');
@@ -154,6 +198,7 @@ test('presenter bar replaces the visible popup and restores the same meeting', {
   await click('#run');
   await click('#next');
   assert.ok(await run("el('notice').textContent.includes('회의 종료') && el('next').hidden"));
+  await assertStageFits();
   assert.ok(await run("el('delta').hidden"));
   await click('#undo');
   assert.equal(await run("el('speaker').textContent"), '발표자 2');
@@ -161,7 +206,9 @@ test('presenter bar replaces the visible popup and restores the same meeting', {
     const shot = await call('Page.captureScreenshot', {format: 'png'}, page);
     await writeFile(process.env.TIMER_SCREENSHOT, Buffer.from(shot.data, 'base64'));
   }
+  await click('#edit');
   await click('#theme');
+  await click('#cancel');
   const popupId = await run('chrome.windows.getCurrent().then(w => w.id)');
   const popupState = () => evaluate(worker, 'chrome.windows.get(' + popupId + ').then(w => w.state)');
   const open = async () => {
@@ -173,6 +220,19 @@ test('presenter bar replaces the visible popup and restores the same meeting', {
     await until(async () => await popupState() === 'normal' && await run("!documentPictureInPicture.window && !document.querySelector('#mini').disabled"));
   };
   await open();
+  async function assertBarLayout() {
+    const layout = await run(`(() => {
+      const doc = mini.document;
+      const bar = doc.querySelector('.miniBar');
+      const boxes = Array.from(bar.children).slice(0, 3).map(child => child.getBoundingClientRect());
+      return {width: mini.innerWidth, height: mini.innerHeight, scrollWidth: doc.documentElement.scrollWidth,
+        scrollHeight: doc.documentElement.scrollHeight,
+        singleRow: boxes.every(box => Math.abs((box.top + box.bottom) / 2 - (boxes[0].top + boxes[0].bottom) / 2) < 1)};
+    })()`);
+    assert.ok(layout.singleRow && layout.scrollWidth <= layout.width && layout.scrollHeight <= layout.height &&
+      layout.width <= 400, 'The compact bar must fit one row independently of the main popup: ' + JSON.stringify(layout));
+  }
+  await assertBarLayout();
   assert.equal(await run('mini.document.documentElement.dataset.theme'), 'dark');
   await assertIcon('[data-action=run]', '일시정지', 'pause', 'mini.document');
   await assertIcon('[data-action=next]', '종료', 'stop', 'mini.document');
@@ -182,11 +242,13 @@ test('presenter bar replaces the visible popup and restores the same meeting', {
   await until(async () => await run('miniUI.clock.textContent') !== initialClock);
   await barClick('next');
   assert.ok(await run("miniUI.message.textContent.includes('회의 종료')"));
+  await assertBarLayout();
   await assertIcon('[data-action=run]', '시작', 'play', 'mini.document');
   await assertIcon('[data-action=next]', '다음', 'skip', 'mini.document');
   await barClick('undo');
   await barClick('run');
   assert.equal(await run("miniUI.count.textContent + ' ' + miniUI.message.textContent"), '2 / 2명 일시정지');
+  await assertBarLayout();
   assert.ok(await run("miniUI.next.disabled"));
   await barClick('run');
   await barClick('next');
@@ -194,7 +256,7 @@ test('presenter bar replaces the visible popup and restores the same meeting', {
   await barClick('next');
   assert.equal(await run('miniUI.count.textContent'), '2 / 2명');
   await barClick('run');
-  assert.ok(await run('mini.document.documentElement.scrollWidth <= mini.innerWidth'));
+  await assertBarLayout();
   await barClick('back');
   await restored();
   assert.equal(await run("el('status').textContent"), '일시정지');
@@ -203,7 +265,7 @@ test('presenter bar replaces the visible popup and restores the same meeting', {
   await restored();
   await evaluate(worker, 'chrome.windows.update(' + popupId + ', {width: 660})');
   await open();
-  assert.ok(await run('mini.document.documentElement.scrollWidth <= mini.innerWidth'));
+  await assertBarLayout();
   await evaluate(worker, 'openTimer()');
   await restored();
   await click('#edit');
@@ -217,7 +279,7 @@ test('presenter bar replaces the visible popup and restores the same meeting', {
   assert.equal(dialogAnswers.length, 0, 'Both confirmation choices were exercised');
   // Keep device emulation after the native popup input and PiP checks.
   await run("state = {...state, index: 1, plan: 10 * minute, budget: 12 * minute}; render()");
-  await call('Emulation.setDeviceMetricsOverride', {width: 280, height: 260, deviceScaleFactor: 1, mobile: false}, page);
+  await call('Emulation.setDeviceMetricsOverride', {width: 280, height: 196, deviceScaleFactor: 1, mobile: false}, page);
   await until(() => run("innerWidth === 280"));
   assert.ok(await run(`(() => {
     const delta = el('delta').getBoundingClientRect();
@@ -225,5 +287,13 @@ test('presenter bar replaces the visible popup and restores the same meeting', {
     return !el('delta').hidden && document.documentElement.scrollWidth === innerWidth &&
       delta.right <= left.left && delta.y > el('deadline').getBoundingClientRect().y;
   })()`), 'The narrow timer must fit the visible plan comparison and time remaining');
+  await assertActionRow();
+  await assertStageFits();
+  await run("notify('회의 종료 · 되돌리기로 마지막 발표를 복원할 수 있습니다.')");
+  await assertStageFits();
+  await call('Emulation.setDeviceMetricsOverride', {width: 280, height: 154, deviceScaleFactor: 1, mobile: false}, page);
+  await until(() => run("innerHeight === 154"));
+  await run("el('edit').click()");
+  await assertSettingsControls();
   await call('Browser.close', {});
 });

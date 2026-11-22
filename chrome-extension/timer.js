@@ -47,7 +47,7 @@ function advance(host = window) {
   previous = {...state};
   if (last) {
     state = meeting(state.count, nextHour(now));
-    notify('회의 종료 · 되돌리기로 마지막 발표를 복원할 수 있습니다.', '회의 종료 · 되돌리기');
+    notify('회의 종료 · 되돌리기로 마지막 발표를 복원할 수 있습니다.', '회의 종료');
   } else {
     notify('');
     state.index++;
@@ -99,25 +99,22 @@ try { if (localStorage.getItem('timer-theme') === 'dark') initialTheme = 'dark';
 chooseTheme(initialTheme);
 el('theme').onclick = () => chooseTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark');
 el('mini').prepend(iconFor(el('mini'), 'bar'));
+setIconButton(el('undo'), '되돌리기', 'undo');
+setIconButton(el('edit'), '회의 설정', 'settings');
 
-function drawSpeakers(row, compact) {
+function drawSpeakers(row) {
   const key = state.index + '/' + state.count;
   if (row.dataset.speakers === key) return;
   row.dataset.speakers = key;
   row.replaceChildren();
-  const first = compact ? Math.max(0, Math.min(state.index - 2, state.count - 5)) : 0;
-  const last = compact ? Math.min(state.count, first + 5) : state.count;
-  if (first > 0) row.append('…');
-  for (let i = first; i < last; i++) {
-    const mark = row.ownerDocument.createElement(compact ? 'span' : 'i');
-    if (compact) mark.textContent = i + 1;
+  for (let i = 0; i < state.count; i++) {
+    const mark = document.createElement('i');
     if (state.index === i) {
-      mark.className = compact ? 'active' : 'current';
+      mark.className = 'current';
       mark.setAttribute('aria-current', 'step');
     } else if (i < state.index) mark.className = 'done';
     row.append(mark);
   }
-  if (last < state.count) row.append('…');
 }
 function render() {
   const now = Date.now();
@@ -152,7 +149,7 @@ function render() {
   el('deadline').textContent = hour(state.end);
   el('left').textContent = now >= state.end ? '회의 시간 종료' : Math.ceil((state.end - now) / minute) + '분 남음';
   el('left').classList.toggle('warn', now >= state.end);
-  drawSpeakers(el('segments'), false);
+  drawSpeakers(el('segments'));
   el('segments').style.setProperty('--progress', progress);
   el('run').textContent = runLabel;
   el('next').textContent = nextLabel;
@@ -161,10 +158,10 @@ function render() {
   document.title = clock + ' · ' + speaker + ' · 회의 타이머';
   if (miniUI) {
     miniUI.count.textContent = (state.index + 1) + ' / ' + state.count + '명';
-    drawSpeakers(miniUI.slots, true);
     miniUI.clock.textContent = clock;
     miniUI.clock.classList.toggle('over', rem <= -15000);
-    miniUI.message.textContent = barNotice || (closing ? countdown : over && !paused ? '시간 초과' : status);
+    const message = barNotice || (paused ? '일시정지' : over ? '시간 초과' : '');
+    if (miniUI.message.textContent !== message) miniUI.message.textContent = message;
     setIconButton(miniUI.run, runLabel, running ? 'pause' : 'play');
     setIconButton(miniUI.next, nextLabel, nextLabel === '종료' ? 'stop' : 'skip');
     miniUI.next.disabled = !running;
@@ -189,7 +186,7 @@ function updateSettingsHint() {
   const end = proposedEnd();
   const tomorrow = new Date(end).toDateString() !== new Date().toDateString() && end > Date.now();
   el('endLabel').textContent = tomorrow ? '회의 종료 시각 · 다음 날' : '회의 종료 시각';
-  el('settingHint').textContent = '종료 시각이나 인원을 바꿔 저장하면 새 회의가 시작됩니다.';
+  el('settingHint').textContent = '종료 시각이나 인원을 바꾸면 새 회의가 시작됩니다.';
 }
 el('settingsForm').oninput = updateSettingsHint;
 el('edit').onclick = () => {
@@ -228,12 +225,10 @@ async function openBar() {
   button.disabled = true;
   let host;
   try {
-    const width = window.innerWidth;
-    // Some Windows configurations include the system title bar in the requested height.
-    const height = (width < 520 ? 88 : 58) + Math.max(56, window.outerHeight - window.innerHeight);
+    const width = 328;
     host = window.documentPictureInPicture
-      ? await documentPictureInPicture.requestWindow({width, height, disallowReturnToOpener: true})
-      : window.open('', 'meeting-timer-bar', 'popup,width=' + width + ',height=' + height);
+      ? await documentPictureInPicture.requestWindow({width, height: 92, disallowReturnToOpener: true})
+      : window.open('', 'meeting-timer-bar', 'popup,width=' + width + ',height=48');
     if (!host) throw new Error('Popup blocked');
     mini = host;
     const doc = host.document;
@@ -248,7 +243,7 @@ async function openBar() {
     const action = name => doc.querySelector('[data-action="' + name + '"]');
     miniUI = {
       run: action('run'), next: action('next'), undo: action('undo'),
-      slots: doc.querySelector('.slots'), count: doc.querySelector('.count'),
+      count: doc.querySelector('.count'),
       clock: doc.querySelector('.miniClock'), message: doc.querySelector('.message'), fill: doc.querySelector('.track i')
     };
     miniUI.run.onclick = () => toggle(host);
