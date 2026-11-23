@@ -2,7 +2,7 @@
 param([string]$PackageDirectory = (Join-Path $PSScriptRoot '..\dist'))
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.IO.Compression.FileSystem
-$testRoot = Join-Path ([IO.Path]::GetTempPath()) ('Meeting Timer ' + [guid]::NewGuid().ToString('N'))
+$testRoot = Join-Path ([IO.Path]::GetTempPath()) ('Time per Turn ' + [guid]::NewGuid().ToString('N'))
 $windows = Join-Path $testRoot 'Windows'
 $extension = Join-Path $testRoot 'Chrome'
 $oldExtension = $env:TIMER_EXTENSION_DIR
@@ -23,7 +23,7 @@ function Test-BatLaunch {
                 if ($child) { $process = Get-Process -Id $child.ProcessId }
             }
             if ($process) { $process.Refresh() }
-            if ($process -and $process.MainWindowTitle.EndsWith(' · 발표자 1 · 회의 타이머')) { break }
+            if ($process -and $process.MainWindowTitle.EndsWith(' · Speaker 1 · Time per Turn')) { break }
             if ([datetime]::UtcNow -ge $deadline) { throw 'Packaged BAT did not show the timer window.' }
             Start-Sleep -Milliseconds 120
         } while ($true)
@@ -45,7 +45,7 @@ try {
     $entries = @(Get-ChildItem -LiteralPath $windows -Name | Sort-Object)
     if (($entries -join ',') -ne 'MeetingTimer.bat,MeetingTimer.ps1,TimeModel.ps1') { throw 'Unexpected Windows package contents.' }
     $manifest = Get-Content -LiteralPath (Join-Path $extension 'manifest.json') -Raw -Encoding UTF8 | ConvertFrom-Json
-    if ($manifest.name -ne '회의 타이머') { throw 'Unexpected extension display name.' }
+    if ($manifest.name -ne 'Time per Turn') { throw 'Unexpected extension display name.' }
     Test-BatLaunch
     Write-Host 'Extracted BAT launched, closed and saved its settings.'
     $env:TIMER_EXTENSION_DIR = $extension

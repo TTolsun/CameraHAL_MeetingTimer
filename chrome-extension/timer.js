@@ -23,7 +23,7 @@ function save() {
   render();
 }
 function mayStart(now, host) {
-  return now < state.end || host.confirm('회의 종료 시각이 지났습니다. 다음 발표 시간을 초과 시간으로 기록할까요?');
+  return now < state.end || host.confirm('The meeting end time has passed. Track the next speaker in overtime?');
 }
 function toggle(host = window) {
   const now = Date.now();
@@ -47,7 +47,7 @@ function advance(host = window) {
   previous = {...state};
   if (last) {
     state = meeting(state.count, nextHour(now));
-    notify('회의 종료 · 되돌리기로 마지막 발표를 복원할 수 있습니다.', '회의 종료');
+    notify('Meeting ended. Use Undo to return to the last speaker.', 'Meeting ended');
   } else {
     notify('');
     state.index++;
@@ -61,7 +61,7 @@ function undo() {
   if (!previous) return;
   state = previous;
   previous = null;
-  notify('이전 발표로 돌아왔습니다.');
+  notify('Returned to the previous speaker.');
   save();
 }
 let mini = null;
@@ -91,7 +91,7 @@ function chooseTheme(theme) {
   document.documentElement.dataset.theme = theme;
   if (miniUI) mini.document.documentElement.dataset.theme = theme;
   const dark = theme === 'dark';
-  setIconButton(el('theme'), dark ? '밝은 화면으로 전환' : '어두운 화면으로 전환', dark ? 'sun' : 'moon');
+  setIconButton(el('theme'), dark ? 'Switch to light theme' : 'Switch to dark theme', dark ? 'sun' : 'moon');
   try { localStorage.setItem('timer-theme', theme); } catch {}
 }
 let initialTheme = 'light';
@@ -99,8 +99,8 @@ try { if (localStorage.getItem('timer-theme') === 'dark') initialTheme = 'dark';
 chooseTheme(initialTheme);
 el('theme').onclick = () => chooseTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark');
 el('mini').prepend(iconFor(el('mini'), 'bar'));
-setIconButton(el('undo'), '되돌리기', 'undo');
-setIconButton(el('edit'), '회의 설정', 'settings');
+setIconButton(el('undo'), 'Undo', 'undo');
+setIconButton(el('edit'), 'Meeting settings', 'settings');
 
 function drawSpeakers(row) {
   const key = state.index + '/' + state.count;
@@ -124,15 +124,15 @@ function render() {
   const idle = state.budget === null;
   const paused = !idle && !running;
   const over = !idle && rem <= 0;
-  const status = paused ? '일시정지' : running ? '진행 중' : '대기';
+  const status = paused ? 'Paused' : running ? 'Running' : 'Ready';
   const clock = duration(rem);
-  const speaker = '발표자 ' + (state.index + 1);
-  const runLabel = running ? '일시정지' : paused ? '계속' : '시작';
-  const nextLabel = state.index + 1 === state.count ? '종료' : '다음';
+  const speaker = 'Speaker ' + (state.index + 1);
+  const runLabel = running ? 'Pause' : paused ? 'Resume' : 'Start';
+  const nextLabel = state.index + 1 === state.count ? 'Finish' : 'Next';
   const progress = (budget ? Math.max(0, Math.min(1, 1 - rem / budget)) : Number(over)) * 100 + '%';
   const closing = running && rem > 0 && rem <= Math.max(minute, budget * .3);
   const seconds = Math.ceil(rem / 1000);
-  const countdown = [Math.floor(seconds / 60) && Math.floor(seconds / 60) + '분', seconds % 60 && seconds % 60 + '초'].filter(Boolean).join(' ') + ' 남았어요';
+  const countdown = [Math.floor(seconds / 60) && Math.floor(seconds / 60) + ' min', seconds % 60 && seconds % 60 + ' sec'].filter(Boolean).join(' ') + ' left';
   el('now').textContent = hour(now);
   const delta = state.plan == null ? 0 : budget - state.plan;
   el('delta').hidden = delta === 0;
@@ -143,11 +143,11 @@ function render() {
   el('speaker').textContent = speaker;
   el('clock').textContent = clock;
   el('clock').classList.toggle('over', rem <= -15000);
-  el('status').textContent = over ? (paused ? '초과 · 일시정지' : '시간 초과') : status;
+  el('status').textContent = over ? (paused ? 'Overtime · Paused' : 'Overtime') : status;
   el('budget').textContent = closing ? countdown : over || paused ? '' :
-    idle && !budget ? '시작하면 초과 시간을 기록합니다' : '배정 ' + duration(budget) + (idle ? ' · 시작을 눌러 주세요' : '');
+    idle && !budget ? 'Press Start to track overtime' : 'Allocated ' + duration(budget) + (idle ? ' · Press Start' : '');
   el('deadline').textContent = hour(state.end);
-  el('left').textContent = now >= state.end ? '회의 시간 종료' : Math.ceil((state.end - now) / minute) + '분 남음';
+  el('left').textContent = now >= state.end ? 'End time reached' : Math.ceil((state.end - now) / minute) + ' min left';
   el('left').classList.toggle('warn', now >= state.end);
   drawSpeakers(el('segments'));
   el('segments').style.setProperty('--progress', progress);
@@ -155,16 +155,16 @@ function render() {
   el('next').textContent = nextLabel;
   el('next').hidden = !running;
   el('undo').disabled = !previous;
-  document.title = clock + ' · ' + speaker + ' · 회의 타이머';
+  document.title = clock + ' · ' + speaker + ' · Time per Turn';
   if (miniUI) {
-    miniUI.count.textContent = (state.index + 1) + ' / ' + state.count + '명';
+    miniUI.count.textContent = (state.index + 1) + ' / ' + state.count;
     miniUI.clock.textContent = clock;
     miniUI.clock.classList.toggle('over', rem <= -15000);
     miniUI.clock.classList.toggle('wide', clock.length > 5);
-    const message = barNotice || (paused ? '일시정지' : over ? '시간 초과' : '');
+    const message = barNotice || (paused ? 'Paused' : over ? 'Overtime' : '');
     if (miniUI.message.textContent !== message) miniUI.message.textContent = message;
     setIconButton(miniUI.run, runLabel, running ? 'pause' : 'play');
-    setIconButton(miniUI.next, nextLabel, nextLabel === '종료' ? 'stop' : 'skip');
+    setIconButton(miniUI.next, nextLabel, nextLabel === 'Finish' ? 'stop' : 'skip');
     miniUI.next.disabled = !running;
     miniUI.undo.disabled = !previous;
     miniUI.fill.style.width = progress;
@@ -186,8 +186,8 @@ function proposedEnd() {
 function updateSettingsHint() {
   const end = proposedEnd();
   const tomorrow = new Date(end).toDateString() !== new Date().toDateString() && end > Date.now();
-  el('endLabel').textContent = tomorrow ? '회의 종료 시각 · 다음 날' : '회의 종료 시각';
-  el('settingHint').textContent = '종료 시각이나 인원을 바꾸면 새 회의가 시작됩니다.';
+  el('endLabel').textContent = tomorrow ? 'End time (tomorrow)' : 'Meeting end time';
+  el('settingHint').textContent = 'Changing the end time or speaker count starts a new meeting.';
 }
 el('settingsForm').oninput = updateSettingsHint;
 el('edit').onclick = () => {
@@ -204,10 +204,10 @@ el('settingsForm').onsubmit = event => {
   const end = proposedEnd();
   if (end !== state.end || count !== state.count) {
     if (end - now < count * minute) {
-      el('settingHint').textContent = '한 사람당 최소 1분이 필요합니다. 인원을 줄이거나 종료 시각을 늦춰 주세요.';
+      el('settingHint').textContent = 'Allow at least 1 min per speaker. Choose fewer speakers or a later end time.';
       return;
     }
-    if (state.budget !== null && !confirm('진행 중인 회의를 끝내고 새 설정으로 시작할까요?')) return;
+    if (state.budget !== null && !confirm('End this meeting and start a new one with these settings?')) return;
     state = meeting(count, end);
     previous = null;
     notify('');
@@ -219,7 +219,7 @@ el('settingsForm').onsubmit = event => {
 // window can contain other tabs and must stay under the user's control.
 const owner = extensionWindow ? chrome.windows.getCurrent() : Promise.resolve(null);
 const resetSize = el('resetSize');
-setIconButton(resetSize, '기본 크기로 복원', 'reset-size');
+setIconButton(resetSize, 'Restore default size', 'reset-size');
 owner.then(popup => { resetSize.hidden = popup?.type !== 'popup'; }).catch(() => {});
 resetSize.onclick = async () => {
   if (resetSize.disabled || resetSize.hidden) return;
@@ -246,7 +246,7 @@ resetSize.onclick = async () => {
     }
   } catch (error) {
     console.error('Could not restore the timer popup to its default bounds.', {windowId: popup?.id, bounds: timerBounds}, error);
-    notify('창 크기를 복원할 수 없습니다.');
+    notify('Could not restore the window size.');
   } finally {
     resetSize.disabled = false;
   }
@@ -270,8 +270,8 @@ async function openBar() {
     if (!host) throw new Error('Popup blocked');
     mini = host;
     const doc = host.document;
-    doc.title = '발표 막대';
-    doc.documentElement.lang = 'ko';
+    doc.title = 'Presenter bar';
+    doc.documentElement.lang = 'en';
     doc.documentElement.dataset.theme = document.documentElement.dataset.theme;
     const css = doc.createElement('link');
     css.rel = 'stylesheet';
@@ -287,9 +287,9 @@ async function openBar() {
     miniUI.run.onclick = () => toggle(host);
     miniUI.next.onclick = () => advance(host);
     miniUI.undo.onclick = undo;
-    setIconButton(miniUI.undo, '되돌리기', 'undo');
+    setIconButton(miniUI.undo, 'Undo', 'undo');
     const back = action('back');
-    setIconButton(back, '기본 창으로 돌아가기', 'back');
+    setIconButton(back, 'Back to timer', 'back');
     back.onclick = () => host.close();
     const reset = action('reset');
     // Document Picture-in-Picture accepted user-initiated resizing starting in Chrome 121.
@@ -300,7 +300,7 @@ async function openBar() {
       const defaults = pictureInPicture && chromeMajor < 130
         ? {width: width + host.outerWidth - host.innerWidth, height: 38 + host.outerHeight - host.innerHeight}
         : {width: host.outerWidth, height: host.outerHeight};
-      setIconButton(reset, '기본 크기로 복원', 'reset-size');
+      setIconButton(reset, 'Restore default size', 'reset-size');
       const updateReset = () => {
         const atDefault = Math.abs(host.outerWidth - defaults.width) <= 2 && Math.abs(host.outerHeight - defaults.height) <= 2;
         if (atDefault && doc.activeElement === reset) back.focus();
@@ -343,7 +343,7 @@ async function openBar() {
   } catch {
     if (host && !host.closed) host.close();
     transition = Promise.resolve();
-    notify('발표 막대를 열 수 없습니다. 타이머 창에서 다시 시도해 주세요.');
+    notify('Could not open the presenter bar. Try again from the timer window.');
   } finally {
     if (!mini) button.disabled = false;
   }
