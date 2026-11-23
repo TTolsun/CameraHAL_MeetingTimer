@@ -1,24 +1,24 @@
 <!doctype html>
-<html lang="ko">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#1a1a1a">
-  <title>회의 타이머</title>
+  <title>Time per Turn</title>
   <link rel="stylesheet" href="timer.css">
   <script defer src="time-model.js"></script>
   <script defer src="window-size.js"></script>
   <script defer src="timer.js"></script>
 </head>
 <body>
-  <main class="timer" aria-label="회의 타이머">
+  <main class="timer" aria-label="Time per Turn">
     <header class="strip">
-      <span class="strip-now">현재 <time id="now"></time></span>
-      <span class="strip-delta" id="delta" title="첫 발표 배정 시간과의 차이" hidden>계획 대비 <b id="deltaValue"></b></span>
-      <span class="strip-end">종료 <time id="deadline"></time></span>
+      <span class="strip-now">Now <time id="now"></time></span>
+      <span class="strip-delta" id="delta" title="Change from the first speaker’s allocation" hidden>From plan <b id="deltaValue"></b></span>
+      <span class="strip-end">End <time id="deadline"></time></span>
       <span id="left"></span>
     </header>
-    <section class="stage" aria-label="현재 발표">
+    <section class="stage" aria-label="Current speaker">
       <div class="stage-head">
         <h1 id="speaker"></h1><span id="status"></span>
         <button class="icon-button reset-size" id="resetSize" hidden></button>
@@ -27,15 +27,15 @@
       <p id="budget"></p><p id="notice" role="status"></p>
       <div id="segments" aria-hidden="true"></div>
     </section>
-    <footer class="actions" aria-label="타이머 조작">
-      <button class="primary" id="run">시작</button><button class="ink" id="next" hidden>다음</button>
+    <footer class="actions" aria-label="Timer controls">
+      <button class="primary" id="run">Start</button><button class="ink" id="next" hidden>Next</button>
       <button class="icon-button" id="undo" aria-keyshortcuts="Control+Z" disabled></button>
       <button class="icon-button" id="edit"></button>
-      <button id="mini" aria-keyshortcuts="B" title="발표 막대 열기 (B)">발표 막대 열기</button>
+      <button id="mini" aria-keyshortcuts="B" title="Presenter bar (B)">Presenter bar</button>
     </footer>
   </main>
   <template id="barTemplate">
-    <main class="miniBar" aria-label="발표 막대">
+    <main class="miniBar" aria-label="Presenter bar">
       <div class="barState"><b class="count"></b><span class="message" role="status"></span></div>
       <div class="miniClockFrame"><span class="miniClock" role="timer"></span></div>
       <div class="controls">
@@ -62,14 +62,14 @@
     <svg data-icon="bar" viewBox="0 0 24 24"><rect x="3" y="7" width="18" height="10" rx="2"/><path d="M7 12h4m4 0h2"/></svg>
   </template>
   <dialog id="settings" aria-labelledby="settingsTitle"><form id="settingsForm">
-    <div class="dialogHead"><h2 id="settingsTitle">회의 설정</h2><button type="button" id="theme" class="icon-button"></button></div>
+    <div class="dialogHead"><h2 id="settingsTitle">Meeting settings</h2><button type="button" id="theme" class="icon-button"></button></div>
     <div class="settingFields">
-      <label><span id="endLabel">회의 종료 시각</span><input id="endInput" type="time" required autofocus></label>
-      <label>발표 인원<input id="countInput" type="number" min="1" max="50" step="1" required></label>
+      <label><span id="endLabel">Meeting end time</span><input id="endInput" type="time" required autofocus></label>
+      <label>Speakers<input id="countInput" type="number" min="1" max="50" step="1" required></label>
     </div>
     <div class="dialogFoot">
       <p id="settingHint" role="status"></p>
-      <div class="dialogActions"><button type="button" id="cancel">취소</button><button class="primary" type="submit">저장</button></div>
+      <div class="dialogActions"><button type="button" id="cancel">Cancel</button><button class="primary" type="submit">Save</button></div>
     </div>
   </form></dialog>
 </body>

@@ -123,9 +123,9 @@ Toggle-Run
 Step 419; Check 'normal above 30 percent left' (Get-Phase).Level 'normal'
 Step 1;   Check 'notice at 30 percent left' (Get-Phase).Level 'notice'
 Step 120; Check 'critical at 10 percent left' (Get-Phase).Level 'critical'
-Check 'exactly one minute left is read naturally' (Get-RemainingMessage (Get-Phase).Rem) '1분 남았어요'
-Check 'mixed minutes and seconds are shown' (Get-RemainingMessage 65) '1분 5초 남았어요'
-Check 'remaining seconds use countdown rounding' (Get-RemainingMessage 0.2) '1초 남았어요'
+Check 'exactly one minute left is read naturally' (Get-RemainingMessage (Get-Phase).Rem) '1 min left'
+Check 'mixed minutes and seconds are shown' (Get-RemainingMessage 65) '1 min 5 sec left'
+Check 'remaining seconds use countdown rounding' (Get-RemainingMessage 0.2) '1 sec left'
 Step 60
 Check 'over at zero' (Get-Phase).Level 'over'
 Check 'countdown text at zero' (Get-Phase).Text '+00:00'
@@ -145,15 +145,15 @@ Check 'paused overtime retains its reading' (Get-Phase).Text '+00:15'
 New-Meeting 1 '14:57:00' '15:00:00'
 Toggle-Run
 Step 119
-Check 'three-minute share at 61 seconds is still quiet' (Get-BarMessage (Get-Phase)) '진행 중'
+Check 'three-minute share at 61 seconds is still quiet' (Get-BarMessage (Get-Phase)) 'Running'
 Step 1
 Check 'three-minute share is still above the 30% boundary' (Get-Phase).Level 'normal'
 Check 'three-minute share shows the closing cue at one minute' (Get-Phase).Closing $true
-Check 'the presenter bar reads one minute accurately' (Get-BarMessage (Get-Phase)) '1분 남았어요'
+Check 'the presenter bar reads one minute accurately' (Get-BarMessage (Get-Phase)) '1 min left'
 New-Meeting 1 '14:58:00' '15:00:00'
 Toggle-Run
 Step 60
-Check 'two-minute share also shows the cue at one minute' (Get-BarMessage (Get-Phase)) '1분 남았어요'
+Check 'two-minute share also shows the cue at one minute' (Get-BarMessage (Get-Phase)) '1 min left'
 
 # The camera visits consecutive nearby speaker numbers and animates on Next only.
 foreach ($case in @(
@@ -273,9 +273,9 @@ Check 'restart clears previous time' (Get-Elapsed 0) 0
 Check 'fresh meeting uses all remaining time' (Get-Preview) 300
 Check 'exact minute per speaker fits' (Get-ScheduleIssue 2 (Get-Date).AddSeconds(120)) $null
 Check 'one second short requires adjustment' ([bool](Get-ScheduleIssue 2 (Get-Date).AddSeconds(119))) $true
-Check 'expired deadline gives a reason' ((Get-ScheduleIssue 1 (Get-Date)) -match '지났습니다') $true
+Check 'expired deadline gives a reason' ((Get-ScheduleIssue 1 (Get-Date)) -match 'has passed') $true
 Check 'fewer than sixty seconds cannot support one speaker' ([bool](Get-ScheduleIssue 1 (Get-Date).AddSeconds(59))) $true
-Check 'app speaker limit has its own explanation' ((Get-ScheduleIssue 51 (Get-Date).AddHours(3)) -match '최대 50명') $true
+Check 'app speaker limit has its own explanation' ((Get-ScheduleIssue 51 (Get-Date).AddHours(3)) -match 'up to 50 speakers') $true
 
 # ---------------- config (untrusted input) ----------------
 $script:ConfigFile = Join-Path ([IO.Path]::GetTempPath()) ('mt-test-{0}.json' -f [guid]::NewGuid())

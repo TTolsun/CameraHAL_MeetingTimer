@@ -137,8 +137,8 @@ test('presenter bar replaces the visible popup and restores the same meeting', {
       return [button.getAttribute('aria-label'), svg?.dataset.icon, svg?.getAttribute('aria-hidden')];
     })()`), [label, icon, 'true']);
   }
-  assert.ok(await run("el('mini').textContent.trim() === '발표 막대 열기' && !!el('mini').querySelector('svg[data-icon=bar]')"));
-  await assertIcon('#edit', '회의 설정', 'settings');
+  assert.ok(await run("el('mini').textContent.trim() === 'Presenter bar' && !!el('mini').querySelector('svg[data-icon=bar]')"));
+  await assertIcon('#edit', 'Meeting settings', 'settings');
   async function assertSettingsControls() {
     assert.equal(await run('document.activeElement?.id'), 'endInput', 'Settings must open with the end-time input focused');
     const layout = await run(`(() => {
@@ -158,13 +158,13 @@ test('presenter bar replaces the visible popup and restores the same meeting', {
   }
   await click('#edit');
   await assertSettingsControls();
-  await assertIcon('#theme', '어두운 화면으로 전환', 'moon');
+  await assertIcon('#theme', 'Switch to dark theme', 'moon');
   await click('#theme');
   assert.equal(await run("localStorage.getItem('timer-theme')"), 'dark');
   await call('Page.reload', {}, page);
   await until(() => run("document.readyState === 'complete' && document.documentElement.dataset.theme === 'dark'"));
   await click('#edit');
-  await assertIcon('#theme', '밝은 화면으로 전환', 'sun');
+  await assertIcon('#theme', 'Switch to light theme', 'sun');
   await click('#theme');
   assert.equal(await run("document.documentElement.dataset.theme"), 'light');
   await run("el('countInput').value = 49");
@@ -173,10 +173,10 @@ test('presenter bar replaces the visible popup and restores the same meeting', {
   assert.equal(await run("el('countInput').value"), '6');
   await run("el('countInput').value = 50; el('endInput').value = hour(Date.now() + 5 * minute)");
   await click('button[type=submit]');
-  assert.ok(await run("settings.open && el('settingHint').textContent.includes('최소 1분')"));
+  assert.ok(await run("settings.open && el('settingHint').textContent.includes('at least 1 min')"));
   await run("el('endInput').value = hour(Date.now() - minute); el('endInput').dispatchEvent(new Event('input', {bubbles:true}))");
   if (await run("new Date().getHours() + new Date().getMinutes() > 0")) {
-    assert.ok(await run("el('endLabel').textContent.includes('다음 날')"));
+    assert.ok(await run("el('endLabel').textContent.includes('tomorrow')"));
   }
   await run("el('countInput').value = 2; el('endInput').value = hour(Date.now() + 35 * minute)");
   await click('button[type=submit]');
@@ -189,19 +189,19 @@ test('presenter bar replaces the visible popup and restores the same meeting', {
   assert.ok(await run("el('delta').hidden && state.plan === state.budget"));
   await until(() => run("Date.now() - state.started >= 1000"));
   await click('#next');
-  assert.match(await run("el('delta').hidden ? '' : el('delta').textContent"), /^계획 대비 \+\d+:\d{2}$/);
+  assert.match(await run("el('delta').hidden ? '' : el('delta').textContent"), /^From plan \+\d+:\d{2}$/);
   assert.equal(await run("el('deadline').getBoundingClientRect().x"), deadlineX);
-  assert.equal(await run("el('next').textContent"), '종료');
+  assert.equal(await run("el('next').textContent"), 'Finish');
   await call('Input.dispatchKeyEvent', {type: 'keyDown', key: ' ', code: 'Space', windowsVirtualKeyCode: 32}, page);
   await call('Input.dispatchKeyEvent', {type: 'keyUp', key: ' ', code: 'Space', windowsVirtualKeyCode: 32}, page);
-  assert.ok(await run("el('speaker').textContent === '발표자 2' && el('run').textContent === '계속'"));
+  assert.ok(await run("el('speaker').textContent === 'Speaker 2' && el('run').textContent === 'Resume'"));
   await click('#run');
   await click('#next');
-  assert.ok(await run("el('notice').textContent.includes('회의 종료') && el('next').hidden"));
+  assert.ok(await run("el('notice').textContent.includes('Meeting ended') && el('next').hidden"));
   await assertStageFits();
   assert.ok(await run("el('delta').hidden"));
   await click('#undo');
-  assert.equal(await run("el('speaker').textContent"), '발표자 2');
+  assert.equal(await run("el('speaker').textContent"), 'Speaker 2');
   if (process.env.TIMER_SCREENSHOT) {
     const shot = await call('Page.captureScreenshot', {format: 'png'}, page);
     await writeFile(process.env.TIMER_SCREENSHOT, Buffer.from(shot.data, 'base64'));
@@ -213,7 +213,7 @@ test('presenter bar replaces the visible popup and restores the same meeting', {
   const popupState = () => evaluate(worker, 'chrome.windows.get(' + popupId + ').then(w => w.state)');
   const popupSize = () => evaluate(worker, 'chrome.windows.get(' + popupId + ').then(w => [w.width, w.height])');
   const initialPopupSize = await popupSize();
-  await assertIcon('#resetSize', '기본 크기로 복원', 'reset-size');
+  await assertIcon('#resetSize', 'Restore default size', 'reset-size');
   const open = async () => {
     await click('#mini');
     await until(async () => await popupState() === 'minimized');
@@ -243,27 +243,27 @@ test('presenter bar replaces the visible popup and restores the same meeting', {
   }
   await assertBarLayout();
   assert.equal(await run('mini.document.documentElement.dataset.theme'), 'dark');
-  await assertIcon('[data-action=run]', '일시정지', 'pause', 'mini.document');
-  await assertIcon('[data-action=next]', '종료', 'stop', 'mini.document');
-  await assertIcon('[data-action=undo]', '되돌리기', 'undo', 'mini.document');
-  await assertIcon('[data-action=back]', '기본 창으로 돌아가기', 'back', 'mini.document');
+  await assertIcon('[data-action=run]', 'Pause', 'pause', 'mini.document');
+  await assertIcon('[data-action=next]', 'Finish', 'stop', 'mini.document');
+  await assertIcon('[data-action=undo]', 'Undo', 'undo', 'mini.document');
+  await assertIcon('[data-action=back]', 'Back to timer', 'back', 'mini.document');
   const initialClock = await run('miniUI.clock.textContent');
   await until(async () => await run('miniUI.clock.textContent') !== initialClock);
   await barClick('next');
-  assert.ok(await run("miniUI.message.textContent.includes('회의 종료')"));
+  assert.ok(await run("miniUI.message.textContent.includes('Meeting ended')"));
   await assertBarLayout();
-  await assertIcon('[data-action=run]', '시작', 'play', 'mini.document');
-  await assertIcon('[data-action=next]', '다음', 'skip', 'mini.document');
+  await assertIcon('[data-action=run]', 'Start', 'play', 'mini.document');
+  await assertIcon('[data-action=next]', 'Next', 'skip', 'mini.document');
   await barClick('undo');
   await barClick('run');
-  assert.equal(await run("miniUI.count.textContent + ' ' + miniUI.message.textContent"), '2 / 2명 일시정지');
+  assert.equal(await run("miniUI.count.textContent + ' ' + miniUI.message.textContent"), '2 / 2 Paused');
   await assertBarLayout();
   assert.ok(await run("miniUI.next.disabled"));
   await barClick('run');
   await barClick('next');
   await barClick('run');
   await barClick('next');
-  assert.equal(await run('miniUI.count.textContent'), '2 / 2명');
+  assert.equal(await run('miniUI.count.textContent'), '2 / 2');
   await barClick('run');
   await assertBarLayout();
   const barFontSize = () => run('parseFloat(mini.getComputedStyle(miniUI.clock).fontSize)');
@@ -271,13 +271,13 @@ test('presenter bar replaces the visible popup and restores the same meeting', {
   await run('mini.resizeBy(110, 80)');
   await until(() => run("!mini.document.querySelector('[data-action=reset]').hidden"));
   assert.ok(await barFontSize() > initialBarFontSize, 'The clock must use the available space when the bar is enlarged');
-  await assertIcon('[data-action=reset]', '기본 크기로 복원', 'reset-size', 'mini.document');
+  await assertIcon('[data-action=reset]', 'Restore default size', 'reset-size', 'mini.document');
   await barClick('reset');
   await until(defaultBarSize);
-  assert.ok(await run("miniUI.count.textContent === '2 / 2명' && miniUI.message.textContent === '일시정지'"));
+  assert.ok(await run("miniUI.count.textContent === '2 / 2' && miniUI.message.textContent === 'Paused'"));
   await barClick('back');
   await restored();
-  assert.equal(await run("el('status').textContent"), '일시정지');
+  assert.equal(await run("el('status').textContent"), 'Paused');
   await open();
   await run('mini.resizeBy(110, 80)');
   await until(async () => (await barSize())[0] > initialBarSize[0]);
@@ -293,8 +293,8 @@ test('presenter bar replaces the visible popup and restores the same meeting', {
     chrome.runtime.sendMessage = () => { throw new Error('Size reset must not contact the service worker'); };`);
   await click('#resetSize');
   await until(async () => String(await popupSize()) === String(initialPopupSize));
-  assert.equal(await run("el('status').textContent"), '일시정지');
-  assert.ok(await run("!el('notice').textContent.includes('창 크기를 복원할 수 없습니다')"));
+  assert.equal(await run("el('status').textContent"), 'Paused');
+  assert.ok(await run("!el('notice').textContent.includes('Could not restore the window size')"));
   await run("void Object.defineProperty(window, 'documentPictureInPicture', {configurable: true, value: undefined})");
   await click('#mini');
   await until(async () => await popupState() === 'minimized' && await run('!!miniUI'));
@@ -319,7 +319,7 @@ test('presenter bar replaces the visible popup and restores the same meeting', {
   await click('#resetSize');
   await until(async () => await popupState() === 'normal' && String(await popupSize()) === String(initialPopupSize));
   await until(() => run("!el('resetSize').disabled"));
-  assert.equal(await run("el('status').textContent"), '일시정지');
+  assert.equal(await run("el('status').textContent"), 'Paused');
   await evaluate(worker, 'chrome.windows.update(' + popupId + ', {width: 616, height: 450})');
   await until(async () => await popupState() === 'normal' &&
     matchesSize(await popupSize(), [616, 450]) &&
@@ -334,16 +334,16 @@ test('presenter bar replaces the visible popup and restores the same meeting', {
   await run("el('resetSize').click()");
   await until(() => run("rejectedWindowUpdates === 1 && !el('resetSize').disabled"));
   await until(async () => matchesSize(await popupSize(), initialPopupSize));
-  assert.ok(await run("!el('notice').textContent.includes('창 크기를 복원할 수 없습니다')"));
+  assert.ok(await run("!el('notice').textContent.includes('Could not restore the window size')"));
   await run('chrome.windows.update = nativeWindowUpdate');
   await click('#edit');
   await run("el('countInput').value = 3");
   dialogAnswers.push(false);
   await click('button[type=submit]');
-  assert.ok(await run("settings.open && el('speaker').textContent === '발표자 2'"));
+  assert.ok(await run("settings.open && el('speaker').textContent === 'Speaker 2'"));
   dialogAnswers.push(true);
   await click('button[type=submit]');
-  assert.ok(await run("!settings.open && el('status').textContent === '대기' && el('segments').children.length === 3"));
+  assert.ok(await run("!settings.open && el('status').textContent === 'Ready' && el('segments').children.length === 3"));
   assert.equal(dialogAnswers.length, 0, 'Both confirmation choices were exercised');
   // Keep device emulation after the native popup input and PiP checks.
   await run("state = {...state, index: 1, plan: 10 * minute, budget: 12 * minute}; render()");
@@ -357,7 +357,7 @@ test('presenter bar replaces the visible popup and restores the same meeting', {
   })()`), 'The narrow timer must fit the visible plan comparison and time remaining');
   await assertActionRow();
   await assertStageFits();
-  await run("notify('회의 종료 · 되돌리기로 마지막 발표를 복원할 수 있습니다.')");
+  await run("notify('Meeting ended. Use Undo to return to the last speaker.')");
   await assertStageFits();
   await call('Emulation.setDeviceMetricsOverride', {width: 280, height: 154, deviceScaleFactor: 1, mobile: false}, page);
   await until(() => run("innerHeight === 154"));
