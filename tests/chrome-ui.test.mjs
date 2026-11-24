@@ -306,12 +306,16 @@ test('presenter bar replaces the visible popup and restores the same meeting', {
   await run("void Object.defineProperty(window, 'documentPictureInPicture', {configurable: true, value: undefined})");
   await click('#mini');
   await until(async () => await popupState() === 'minimized' && await run('!!miniUI'));
+  const fallbackViewport = () => run('[mini.innerWidth, mini.innerHeight]');
   const fallbackBarSize = await barSize();
+  const initialViewport = await fallbackViewport();
   await assertBarLayout();
   await run('mini.resizeBy(132, 84)');
   await until(() => run("!mini.document.querySelector('[data-action=reset]').hidden"));
   await barClick('reset');
-  await until(async () => matchesSize(await barSize(), fallbackBarSize));
+  await until(async () => matchesSize(await barSize(), fallbackBarSize) &&
+    matchesSize(await fallbackViewport(), initialViewport) &&
+    await run("mini.document.querySelector('[data-action=reset]').hidden"));
   await assertBarLayout();
   await barClick('back');
   await restored();
