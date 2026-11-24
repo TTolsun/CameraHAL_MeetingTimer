@@ -42,11 +42,12 @@ test('presenter bar replaces the visible popup and restores the same meeting', {
   let id = 0;
   const pending = new Map();
   const dialogAnswers = [];
+  let dialogHandled = Promise.resolve();
   socket.onmessage = ({data}) => {
     const message = JSON.parse(data);
     if (message.method === 'Page.javascriptDialogOpening') {
       const accept = dialogAnswers.shift() ?? false;
-      void call('Page.handleJavaScriptDialog', {accept}, message.sessionId);
+      dialogHandled = call('Page.handleJavaScriptDialog', {accept}, message.sessionId);
     }
     if (!pending.has(message.id)) return;
     const {resolve, reject} = pending.get(message.id);
@@ -76,6 +77,7 @@ test('presenter bar replaces the visible popup and restores the same meeting', {
   const page = await attach('/index.html');
   await call('Page.enable', {}, page);
   const run = expression => evaluate(page, expression);
+  const clickButton = selector => run(`document.querySelector(${JSON.stringify(selector)}).click()`);
   await until(() => run("document.readyState === 'complete' && !!document.querySelector('#run').onclick"));
   async function click(selector) {
     const hit = await run(`(() => {
@@ -93,6 +95,12 @@ test('presenter bar replaces the visible popup and restores the same meeting', {
     for (const type of ['mousePressed', 'mouseReleased']) {
       await call('Input.dispatchMouseEvent', {type, ...hit.point, button: 'left', clickCount: 1}, page);
     }
+  }
+  async function clickConfirm(selector, accept) {
+    dialogAnswers.push(accept);
+    await clickButton(selector);
+    await until(() => dialogAnswers.length === 0);
+    await dialogHandled;
   }
   async function barClick(action) {
     const hit = await run(`(() => {
@@ -300,10 +308,7 @@ test('presenter bar replaces the visible popup and restores the same meeting', {
   await until(async () => await popupState() === 'minimized' && await run('!!miniUI'));
   const fallbackBarSize = await barSize();
   await assertBarLayout();
-  await evaluate(worker, `chrome.windows.getAll().then(windows => {
-    const fallback = windows.find(window => window.type === 'popup' && window.id !== ${popupId});
-    return chrome.windows.update(fallback.id, {width: 460, height: 220});
-  })`);
+  await run('mini.resizeBy(132, 84)');
   await until(() => run("!mini.document.querySelector('[data-action=reset]').hidden"));
   await barClick('reset');
   await until(async () => matchesSize(await barSize(), fallbackBarSize));
@@ -338,13 +343,59 @@ test('presenter bar replaces the visible popup and restores the same meeting', {
   await run('chrome.windows.update = nativeWindowUpdate');
   await click('#edit');
   await run("el('countInput').value = 3");
-  dialogAnswers.push(false);
-  await click('button[type=submit]');
+  await clickConfirm('button[type=submit]', false);
   assert.ok(await run("settings.open && el('speaker').textContent === 'Speaker 2'"));
-  dialogAnswers.push(true);
-  await click('button[type=submit]');
-  assert.ok(await run("!settings.open && el('status').textContent === 'Ready' && el('segments').children.length === 3"));
+  await clickConfirm('button[type=submit]', true);
+  await until(() => run("!settings.open && el('status').textContent === 'Ready' && el('segments').children.length === 3"));
   assert.equal(dialogAnswers.length, 0, 'Both confirmation choices were exercised');
+
+  // Seed meetings at exact offsets, then exercise transitions through the actual controls.
+  await run(`const realScenarioNow = Date.now;
+    const savedScenarioState = state, savedScenarioPrevious = previous;
+    let scenarioNow = Date.now();
+    Date.now = () => scenarioNow;
+    function seedScenario(secondsLeft) {
+      state = meeting(2, scenarioNow + secondsLeft * 1000);
+      previous = null;
+      render();
+    }`);
+  try {
+    await run('seedScenario(90)');
+    assert.equal(await run("el('clock').textContent"), '01:00');
+    await clickButton('#run');
+    assert.deepEqual(await run("[state.plan, state.budget, el('delta').hidden]"), [60_000, 60_000, true]);
+
+    await run('seedScenario(600)');
+    await clickButton('#run');
+    assert.equal(await run("el('clock').textContent"), '05:00');
+    await run('scenarioNow += 60_000');
+    await clickButton('#next');
+    assert.deepEqual(await run("[el('speaker').textContent, el('clock').textContent, el('deltaValue').textContent]"),
+      ['Speaker 2', '09:00', '+04:00']);
+    await run('scenarioNow += 12_000');
+    await clickButton('#undo');
+    await until(() => run("el('speaker').textContent === 'Speaker 1' && el('undo').disabled"));
+    assert.deepEqual(await run("[el('speaker').textContent, el('clock').textContent, el('delta').hidden, el('undo').disabled, el('run').textContent]"),
+      ['Speaker 1', '03:48', true, true, 'Pause']);
+
+    await run('scenarioNow += 541_000; render()');
+    await clickConfirm('#next', false);
+    assert.deepEqual(await run("[el('speaker').textContent, el('clock').textContent, el('undo').disabled]"),
+      ['Speaker 1', '+05:13', true]);
+    await clickConfirm('#next', true);
+    await until(() => run("el('speaker').textContent === 'Speaker 2'"));
+    assert.deepEqual(await run("[el('speaker').textContent, state.budget, el('run').textContent]"),
+      ['Speaker 2', 0, 'Pause']);
+    await run('scenarioNow += 10_000; render()');
+    assert.equal(await run("el('clock').textContent"), '+00:10');
+    await clickButton('#undo');
+    await until(() => run("el('speaker').textContent === 'Speaker 1' && el('undo').disabled"));
+    assert.deepEqual(await run("[el('speaker').textContent, el('clock').textContent, state.plan, el('undo').disabled]"),
+      ['Speaker 1', '+05:23', 300_000, true]);
+  } finally {
+    await run("Date.now = realScenarioNow; state = savedScenarioState; previous = savedScenarioPrevious; notify(''); save()");
+  }
+
   // Keep device emulation after the native popup input and PiP checks.
   await run("state = {...state, index: 1, plan: 10 * minute, budget: 12 * minute}; render()");
   await call('Emulation.setDeviceMetricsOverride', {width: 280, height: 196, deviceScaleFactor: 1, mobile: false}, page);

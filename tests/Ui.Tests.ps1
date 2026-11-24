@@ -89,10 +89,8 @@ function Assert($condition, [string]$message) {
     $script:Checks++
 }
 function Fresh([int]$count = 6) {
-    $script:Cfg.Count = $count
-    $script:Undo = $null
-    Start-Over
-    $script:End = (Get-Date).AddMinutes(40)
+    Start-Meeting $count ((Get-Date).AddMinutes(40))
+    Refresh-All
 }
 function Invoke-TestNotice($notice) {
     $notice.Show()
@@ -216,6 +214,43 @@ function Save-MainRender([string]$name) {
 try {
     Assert ($PSVersionTable.PSVersion.Major -eq 5) 'Use Windows PowerShell 5.1'
     Assert ([Threading.Thread]::CurrentThread.ApartmentState -eq 'STA') 'Use -STA for native controls'
+    foreach ($case in @(
+        @('{}', 6, $false, $true, 'light'),
+        @('{"Bar": true}', 6, $true, $true, 'light'),
+        @('{"Bar": "yes"}', 6, $false, $true, 'light'),
+        @('{"Bar": 1}', 6, $false, $true, 'light'),
+        @('{"Count": 4, "Bar": true, "BarEdge": "left", "TopMost": false}', 4, $true, $false, 'light'),
+        @('{"Speakers": 2, "Count": 4, "Theme": "dark"}', 2, $false, $true, 'dark'),
+        @('[1,2,3]', 6, $false, $true, 'light'),
+        @('{"Theme": "Dark"}', 6, $false, $true, 'light')
+    )) {
+        [IO.File]::WriteAllText($script:ConfigFile, $case[0])
+        $settings = Load-Config
+        Assert ($settings.Count -eq $case[1] -and $settings.Bar -eq $case[2] -and
+            $settings.TopMost -eq $case[3] -and $settings.Theme -ceq $case[4] -and
+            $null -eq $settings.PSObject.Properties['BarEdge']) "Read preferences from $($case[0])"
+    }
+    $barState = [pscustomobject]@{ Run = 'run'; Level = 'normal'; Closing = $false; Rem = 61 }
+    Assert ((Get-BarMessage $barState) -eq 'Running') 'The presenter bar stays quiet above the one-minute cue'
+    $barState.Closing = $true
+    $barState.Rem = 60
+    Assert ((Get-BarMessage $barState) -eq '1 min left') 'The presenter bar shows the one-minute cue'
+    Assert ((Get-RemainingMessage 65) -eq '1 min 5 sec left') 'Mixed minutes and seconds are shown'
+    Assert ((Get-RemainingMessage 0.2) -eq '1 sec left') 'Remaining seconds round up'
+
+    # The presenter bar displays consecutive speaker numbers near the current turn.
+    foreach ($case in @(
+        @(1, 0, '1'), @(4, 3, '1 2 3 4'), @(5, 1, '1 2 3 4 5'),
+        @(20, 0, '1 2 3 4 5 …'), @(20, 11, '… 10 11 12 13 14 …'), @(50, 49, '… 46 47 48 49 50')
+    )) {
+        $window = Get-SpeakerWindow $case[0] $case[1]
+        $labels = @()
+        if ($window.Before) { $labels += '…' }
+        $labels += ($window.First + 1)..($window.Last + 1)
+        if ($window.After) { $labels += '…' }
+        Assert (($labels -join ' ') -eq $case[2]) "Speaker window for index $($case[1]) of $($case[0])"
+    }
+
     Set-Theme 'light'
     Fresh
     foreach ($button in ($normalButtons + $barButtons)) {

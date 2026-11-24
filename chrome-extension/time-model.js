@@ -36,3 +36,9 @@ function hour(ms) {
   const date = new Date(ms);
   return [date.getHours(), date.getMinutes()].map(n => String(n).padStart(2, '0')).join(':');
 }
+
+function startSpeaker(state, now) {
+  state.budget ??= allocation(state, now);
+  state.plan ??= state.budget;
+  state.started = now;
+}

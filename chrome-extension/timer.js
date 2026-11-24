@@ -32,9 +32,7 @@ function toggle(host = window) {
     state.started = null;
   } else {
     if (state.budget === null && !mayStart(now, host)) return;
-    state.plan ??= state.budget ?? allocation(state, now);
-    state.budget ??= allocation(state, now);
-    state.started = now;
+    startSpeaker(state, now);
   }
   notify('');
   save();

@@ -1,4 +1,7 @@
-﻿# Default meeting end: the next full hour, or the one after it when the next one is less
+﻿# Minimum share per speaker, in seconds.
+$script:MinShare = 60
+
+# Default meeting end: the next full hour, or the one after it when the next one is less
 # than 10 minutes away (opening the timer at 13:55 for a 14:00 meeting gives 15:00, not 14:00).
 function Get-NextHour {
     $now = Get-Date
@@ -88,4 +91,133 @@ function Get-Phase {
 
 function New-Person {
     [pscustomobject]@{ Used = 0.0; Budget = 0.0; Started = $false }
+}
+
+function Get-PlanDifference {
+    if ($script:Plan -le 0) { return 0 }
+    [math]::Round((Get-Budget $script:Idx) - $script:Plan)
+}
+
+# ---------------- meeting transitions ----------------
+function Start-Meeting([int]$count, [datetime]$endTime = (Get-NextHour), [switch]$keepUndo) {
+    $script:Sw.Reset()
+    $script:People = @(1..$count | ForEach-Object { New-Person })
+    $script:Idx = 0
+    $script:End = $endTime
+    $script:Plan = 0.0
+    if (-not $keepUndo) { $script:Undo = $null }
+}
+
+function Switch-RunState([scriptblock]$confirmOvertime = { $false }) {
+    if ($script:Sw.IsRunning) {
+        $script:Sw.Stop()
+    } else {
+        if (-not (Test-SpeakerStart $script:Idx $confirmOvertime)) { return $false }
+        Lock-Budget
+        $script:Sw.Start()
+    }
+    $true
+}
+
+function Test-SpeakerStart([int]$i, [scriptblock]$confirmOvertime) {
+    if (-not $script:People[$i].Started -and (Get-MeetingLeft) -le 0) {
+        return (& $confirmOvertime)
+    }
+    $true
+}
+
+function Move-ToNextSpeaker([scriptblock]$confirmOvertime = { $false }) {
+    if (-not $script:Sw.IsRunning) { return $false }
+    $next = $script:Idx + 1
+    if ($next -eq $script:People.Count) {
+        Save-Undo 'finish'
+        Start-Meeting $script:People.Count -KeepUndo
+        return $true
+    }
+    if (-not (Test-SpeakerStart $next $confirmOvertime)) { return $false }
+    Save-Undo 'next'
+    $script:People[$script:Idx].Used = Get-Elapsed $script:Idx
+    $script:Sw.Reset()
+    $script:Idx = $next
+    Lock-Budget
+    $script:Sw.Start()
+    $true
+}
+
+function Clear-CurrentSpeaker([scriptblock]$confirmReset = { $false }) {
+    $wasRunning = $script:Sw.IsRunning
+    # Nothing to clear: keep any earlier undo instead of overwriting it with a no-op.
+    if (-not $wasRunning -and (Get-Elapsed $script:Idx) -eq 0 -and $script:People[$script:Idx].Budget -eq 0) { return $false }
+    if (-not (& $confirmReset)) { return $false }
+    Save-Undo 'reset'
+    $script:Sw.Reset()
+    $script:People[$script:Idx] = New-Person
+    if ($wasRunning -and (Get-MeetingLeft) -gt 0) { Lock-Budget; $script:Sw.Start() }
+    $true
+}
+
+# ---------------- undo ----------------
+# One level of undo for the keys that cannot be taken back otherwise: Next (including the
+# finish that starts a fresh meeting) and Reset. The time that passed since then belongs to
+# the speaker who was talking, so it is given back to them if their clock was running.
+function Save-Undo([string]$kind) {
+    $copy = @($script:People | ForEach-Object { $_.PSObject.Copy() })
+    # Fold the running stopwatch into the snapshot.
+    $copy[$script:Idx].Used = Get-Elapsed $script:Idx
+    $script:Undo = [pscustomobject]@{
+        Kind = $kind; People = $copy; Idx = $script:Idx; End = $script:End
+        Plan = $script:Plan; Running = $script:Sw.IsRunning; At = Get-Date
+    }
+}
+
+# Recover the last destructive action, including a reset on the first speaker.
+function Test-UndoAllowed {
+    $null -ne $script:Undo
+}
+
+function Restore-PreviousTurn {
+    $u = $script:Undo
+    if (-not (Test-UndoAllowed)) { return $false }
+    $script:Undo = $null
+    $script:Sw.Reset()
+    $script:People = $u.People
+    $script:Idx = $u.Idx
+    $script:End = $u.End
+    $script:Plan = $u.Plan
+    if ($u.Running) {
+        $script:People[$script:Idx].Used += [math]::Max(0, ((Get-Date) - $u.At).TotalSeconds)
+        $script:Sw.Start()
+    }
+    $true
+}
+
+# True for a few seconds after an undoable action, so the coaching line can offer Ctrl+Z.
+function Test-UndoHint {
+    (Test-UndoAllowed) -and ((Get-Date) - $script:Undo.At).TotalSeconds -lt 10
+}
+
+# ---------------- settings schedule ----------------
+# Resolves the HH:mm picked in the settings dialog to the next time it occurs (today, or tomorrow if past).
+function Resolve-EndTime([datetime]$picked, [datetime]$original) {
+    if ($picked.Hour -eq $original.Hour -and $picked.Minute -eq $original.Minute) { return $original }
+    $now = Get-Date
+    $end = $now.Date.AddHours($picked.Hour).AddMinutes($picked.Minute)
+    if ($end -le $now) { $end = $end.AddDays(1) }
+    $end
+}
+
+# Validate a fresh meeting against all speakers, including anyone who spoke in the old one.
+function Get-ScheduleIssue([long]$count, [datetime]$end) {
+    if ($count -gt 50) { return 'A meeting supports up to 50 speakers.' }
+    $remaining = ($end - (Get-Date)).TotalSeconds
+    $seconds = [math]::Max(0, [math]::Floor($remaining))
+    $capacity = [int][math]::Floor($seconds / $script:MinShare)
+    if ($count -le $capacity) { return }
+    $need = [int][math]::Ceiling($count * $script:MinShare / 60)
+    $reason = if ($remaining -le 0) { 'The selected end time has passed.' } else {
+        'Time left: {0} min {1} sec.' -f [math]::Floor($seconds / 60), ($seconds % 60)
+    }
+    $next = if ($capacity -ge 1) { "Use at most ${capacity} speakers or choose a later end time." }
+            else { 'Choose a later end time.' }
+    "$reason`nSpeaker count: ${count}. Allow at least ${need} min (1 min each).`n`n$next"
 }

@@ -49,8 +49,8 @@ try {
     Test-BatLaunch
     Write-Host 'Extracted BAT launched, closed and saved its settings.'
     $env:TIMER_EXTENSION_DIR = $extension
-    & node --test (Join-Path $PSScriptRoot 'chrome-ui.test.mjs')
-    if ($LASTEXITCODE -ne 0) { throw 'Packaged extension UI test failed.' }
+    & node --test (Join-Path $PSScriptRoot 'chrome-model.test.mjs') (Join-Path $PSScriptRoot 'chrome-ui.test.mjs')
+    if ($LASTEXITCODE -ne 0) { throw 'Packaged extension tests failed.' }
 } finally {
     $env:TIMER_EXTENSION_DIR = $oldExtension
     if ([IO.Directory]::Exists($testRoot)) {
