@@ -23,6 +23,21 @@ function Get-Elapsed([int]$i) {
 
 function Get-MeetingLeft { ($script:End - (Get-Date)).TotalSeconds }
 
+function Get-SpeakerTimeLeft { (Get-MeetingLeft) - $script:WrapReserve }
+
+function Get-WrapOptions([int]$index) {
+    $left = Get-MeetingLeft
+    $count = $script:People.Count - $index
+    $release = [math]::Min($script:WrapReserve, [math]::Max(0, $count * $script:MinShare - ($left - $script:WrapReserve)))
+    if ($left -le 0 -or $release -le 0) { return }
+    $reducedReserve = $script:WrapReserve - $release
+    [pscustomobject]@{
+        Count = $count; Reserve = $reducedReserve; KeepReserve = [math]::Min($left, $script:WrapReserve)
+        KeepShare = Calc-Share ($left - $script:WrapReserve) 0 $count
+        UseShare = Calc-Share ($left - $reducedReserve) 0 $count
+    }
+}
+
 # Pure share calculation (no clock or UI state) so it can be checked in isolation.
 # Whoever finished early leaves no reserved time, so their unused seconds flow into
 # $left and are split evenly across the speakers who have not started.
@@ -45,13 +60,16 @@ function Get-Pending {
 # Share for a speaker who has not started yet: the meeting time that is left,
 # minus what the current (locked) speaker still has, split across everyone unlocked.
 function Get-Preview {
-    if ((Get-MeetingLeft) -le 0) { return 0 }
+    $left = Get-SpeakerTimeLeft
+    if ($left -le 0) { return 0 }
     $pi = Get-Pending
-    Calc-Share (Get-MeetingLeft) $pi.Reserved $pi.Pending $script:MinShare
+    $minimum = if ($script:WrapMinutes -gt 0) { 0 } else { $script:MinShare }
+    Calc-Share $left $pi.Reserved $pi.Pending $minimum
 }
 
 # True when the one-minute minimum no longer fits before the meeting end time.
 function Test-Overbooked {
+    if ($script:WrapMinutes -gt 0) { return $false }
     $pi = Get-Pending
     $pi.Pending -gt 0 -and ((Get-MeetingLeft) - $pi.Reserved) -lt ($pi.Pending * $script:MinShare)
 }
@@ -67,14 +85,29 @@ function Lock-Budget {
         # The first plan is the share at the moment the first speaker starts, before any minimum is applied.
         if ($script:Plan -le 0) {
             $pi = Get-Pending
-            $script:Plan = Calc-Share (Get-MeetingLeft) $pi.Reserved $pi.Pending 0
+            $script:Plan = Calc-Share (Get-SpeakerTimeLeft) $pi.Reserved $pi.Pending 0
         }
         $p.Budget = Get-Preview
         $p.Started = $true
     }
 }
 
+function Get-PlanDifference {
+    if ($script:Plan -le 0 -or $null -ne $script:WrapStart) { return 0 }
+    [math]::Round((Get-Budget $script:Idx) - $script:Plan)
+}
+
 function Get-Phase {
+    if ($null -ne $script:WrapStart) {
+        $rem = Get-MeetingLeft
+        $budget = [math]::Max(0, ($script:End - $script:WrapStart).TotalSeconds)
+        return [pscustomobject]@{
+            El = $budget - $rem; Rem = $rem; Budget = $budget; Run = 'wrap'; Closing = $rem -gt 0
+            Level = if ($rem -le 0) { 'over' } else { 'normal' }
+            Text = if ($rem -lt 0) { '+' + (Fmt (-$rem)) } else { Fmt ([math]::Ceiling($rem)) }
+            Highlight = $rem -le -15
+        }
+    }
     $budget = Get-Budget $script:Idx
     $el = Get-Elapsed $script:Idx
     $rem = $budget - $el
@@ -93,49 +126,85 @@ function New-Person {
     [pscustomobject]@{ Used = 0.0; Budget = 0.0; Started = $false }
 }
 
-function Get-PlanDifference {
-    if ($script:Plan -le 0) { return 0 }
-    [math]::Round((Get-Budget $script:Idx) - $script:Plan)
-}
-
 # ---------------- meeting transitions ----------------
-function Start-Meeting([int]$count, [datetime]$endTime = (Get-NextHour), [switch]$keepUndo) {
+function Start-Meeting([int]$count, [datetime]$endTime = (Get-NextHour), [switch]$keepUndo, [int]$wrapMinutes = 0) {
     $script:Sw.Reset()
     $script:People = @(1..$count | ForEach-Object { New-Person })
     $script:Idx = 0
     $script:End = $endTime
     $script:Plan = 0.0
+    $script:WrapMinutes = $wrapMinutes
+    $script:WrapReserve = $wrapMinutes * 60.0
+    $script:WrapStart = $null
     if (-not $keepUndo) { $script:Undo = $null }
 }
 
-function Switch-RunState([scriptblock]$confirmOvertime = { $false }) {
+function Switch-RunState([scriptblock]$confirmOvertime = { $false }, [scriptblock]$chooseWrap = { 'keep' }) {
+    if ($null -ne $script:WrapStart) { return $false }
     if ($script:Sw.IsRunning) {
         $script:Sw.Stop()
     } else {
-        if (-not (Test-SpeakerStart $script:Idx $confirmOvertime)) { return $false }
+        $reserve = Get-StartReserve $script:Idx $confirmOvertime $chooseWrap
+        if ($null -eq $reserve) { return $false }
+        $script:WrapReserve = $reserve
         Lock-Budget
         $script:Sw.Start()
     }
     $true
 }
 
-function Test-SpeakerStart([int]$i, [scriptblock]$confirmOvertime) {
-    if (-not $script:People[$i].Started -and (Get-MeetingLeft) -le 0) {
-        return (& $confirmOvertime)
+function Get-StartReserve([int]$index, [scriptblock]$confirmOvertime, [scriptblock]$chooseWrap) {
+    if (-not $script:People[$index].Started) {
+        if ((Get-MeetingLeft) -le 0) {
+            if (-not (& $confirmOvertime)) { return }
+        } else {
+            $options = Get-WrapOptions $index
+            if ($options) {
+                $choice = & $chooseWrap $options
+                if ($choice -notin @('keep', 'use')) { return }
+                if ((Get-MeetingLeft) -le 0) {
+                    if (& $confirmOvertime) { return $script:WrapReserve }
+                    return
+                }
+                switch ($choice) {
+                    'keep' { break }
+                    'use' {
+                        $updated = Get-WrapOptions $index
+                        if ($updated) { return $updated.Reserve }
+                        break
+                    }
+                }
+            }
+        }
     }
-    $true
+    $script:WrapReserve
 }
 
-function Move-ToNextSpeaker([scriptblock]$confirmOvertime = { $false }) {
+function Move-ToNextSpeaker([scriptblock]$confirmOvertime = { $false }, [scriptblock]$chooseWrap = { 'keep' }) {
+    if ($null -ne $script:WrapStart) {
+        Save-Undo 'finish' $script:Undo
+        Start-Meeting $script:People.Count -KeepUndo -WrapMinutes $script:WrapMinutes
+        return $true
+    }
     if (-not $script:Sw.IsRunning) { return $false }
     $next = $script:Idx + 1
     if ($next -eq $script:People.Count) {
+        if ($script:WrapMinutes -gt 0) {
+            Save-Undo 'wrap'
+            $script:People[$script:Idx].Used = Get-Elapsed $script:Idx
+            $script:Sw.Reset()
+            $script:WrapStart = Get-Date
+            return $true
+        }
         Save-Undo 'finish'
         Start-Meeting $script:People.Count -KeepUndo
         return $true
     }
-    if (-not (Test-SpeakerStart $next $confirmOvertime)) { return $false }
+
+    $reserve = Get-StartReserve $next $confirmOvertime $chooseWrap
+    if ($null -eq $reserve) { return $false }
     Save-Undo 'next'
+    $script:WrapReserve = $reserve
     $script:People[$script:Idx].Used = Get-Elapsed $script:Idx
     $script:Sw.Reset()
     $script:Idx = $next
@@ -145,6 +214,7 @@ function Move-ToNextSpeaker([scriptblock]$confirmOvertime = { $false }) {
 }
 
 function Clear-CurrentSpeaker([scriptblock]$confirmReset = { $false }) {
+    if ($null -ne $script:WrapStart) { return $false }
     $wasRunning = $script:Sw.IsRunning
     # Nothing to clear: keep any earlier undo instead of overwriting it with a no-op.
     if (-not $wasRunning -and (Get-Elapsed $script:Idx) -eq 0 -and $script:People[$script:Idx].Budget -eq 0) { return $false }
@@ -160,13 +230,15 @@ function Clear-CurrentSpeaker([scriptblock]$confirmReset = { $false }) {
 # One level of undo for the keys that cannot be taken back otherwise: Next (including the
 # finish that starts a fresh meeting) and Reset. The time that passed since then belongs to
 # the speaker who was talking, so it is given back to them if their clock was running.
-function Save-Undo([string]$kind) {
+function Save-Undo([string]$kind, $beforeWrap = $null) {
     $copy = @($script:People | ForEach-Object { $_.PSObject.Copy() })
     # Fold the running stopwatch into the snapshot.
     $copy[$script:Idx].Used = Get-Elapsed $script:Idx
     $script:Undo = [pscustomobject]@{
         Kind = $kind; People = $copy; Idx = $script:Idx; End = $script:End
         Plan = $script:Plan; Running = $script:Sw.IsRunning; At = Get-Date
+        WrapMinutes = $script:WrapMinutes; WrapReserve = $script:WrapReserve; WrapStart = $script:WrapStart
+        BeforeWrap = $beforeWrap
     }
 }
 
@@ -178,12 +250,15 @@ function Test-UndoAllowed {
 function Restore-PreviousTurn {
     $u = $script:Undo
     if (-not (Test-UndoAllowed)) { return $false }
-    $script:Undo = $null
+    $script:Undo = $u.BeforeWrap
     $script:Sw.Reset()
     $script:People = $u.People
     $script:Idx = $u.Idx
     $script:End = $u.End
     $script:Plan = $u.Plan
+    $script:WrapMinutes = $u.WrapMinutes
+    $script:WrapReserve = $u.WrapReserve
+    $script:WrapStart = $u.WrapStart
     if ($u.Running) {
         $script:People[$script:Idx].Used += [math]::Max(0, ((Get-Date) - $u.At).TotalSeconds)
         $script:Sw.Start()

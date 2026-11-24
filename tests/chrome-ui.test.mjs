@@ -66,8 +66,8 @@ test('presenter bar replaces the visible popup and restores the same meeting', {
       .find(info => info.url.startsWith('chrome-extension://') && info.url.endsWith(suffix)));
     return (await call('Target.attachToTarget', {targetId: target.targetId, flatten: true})).sessionId;
   }
-  async function evaluate(session, expression) {
-    const result = await call('Runtime.evaluate', {expression, awaitPromise: true, returnByValue: true, userGesture: true}, session);
+  async function evaluate(session, expression, userGesture = true) {
+    const result = await call('Runtime.evaluate', {expression, awaitPromise: true, returnByValue: true, userGesture}, session);
     assert.ok(!result.exceptionDetails, result.exceptionDetails?.exception?.description || expression);
     return result.result.value;
   }
@@ -145,7 +145,7 @@ test('presenter bar replaces the visible popup and restores the same meeting', {
       return [button.getAttribute('aria-label'), svg?.dataset.icon, svg?.getAttribute('aria-hidden')];
     })()`), [label, icon, 'true']);
   }
-  assert.ok(await run("el('mini').textContent.trim() === 'Presenter bar' && !!el('mini').querySelector('svg[data-icon=bar]')"));
+  assert.equal(await run("el('mini')"), null);
   await assertIcon('#edit', 'Meeting settings', 'settings');
   async function assertSettingsControls() {
     assert.equal(await run('document.activeElement?.id'), 'endInput', 'Settings must open with the end-time input focused');
@@ -221,22 +221,67 @@ test('presenter bar replaces the visible popup and restores the same meeting', {
   const popupState = () => evaluate(worker, 'chrome.windows.get(' + popupId + ').then(w => w.state)');
   const popupSize = () => evaluate(worker, 'chrome.windows.get(' + popupId + ').then(w => [w.width, w.height])');
   const initialPopupSize = await popupSize();
+  const matchesSize = (actual, expected) => actual.every((value, axis) => Math.abs(value - expected[axis]) <= 2);
   await assertIcon('#resetSize', 'Restore default size', 'reset-size');
+  const barReady = () => evaluate(page,
+    "!!miniUI && !mini.closed && mini.getComputedStyle(mini.document.querySelector('.miniBar')).display === 'grid'", false);
+  const pressBarShortcut = async () => {
+    for (const type of ['keyDown', 'keyUp']) {
+      await call('Input.dispatchKeyEvent', {type, key: 'b', code: 'KeyB', windowsVirtualKeyCode: 66}, page);
+    }
+  };
   const open = async () => {
-    await click('#mini');
-    await until(async () => await popupState() === 'minimized');
+    await pressBarShortcut();
+    await until(async () => await popupState() === 'minimized' && await barReady());
     assert.ok(await run("!!documentPictureInPicture.window?.document.querySelector('.miniClock')"));
   };
   const restored = async () => {
-    await until(async () => await popupState() === 'normal' && await run("!mini && !el('mini').disabled"));
+    await until(async () => await popupState() === 'normal' && await run('!mini && !barBusy')).catch(async error => {
+      throw new Error('Timer restore: ' + await popupState() + ', bar open/busy: ' + await run('[!!mini, barBusy]'), {cause: error});
+    });
   };
+  const presenterPopup = () => evaluate(worker, `chrome.windows.getAll().then(windows =>
+    windows.find(w => w.type === 'popup' && w.id !== ${popupId}))`);
+  const closeBarWindow = id => evaluate(worker, 'chrome.windows.remove(' + id + ')');
+  const maximizeBar = id => evaluate(worker, 'chrome.windows.update(' + id + ', {state:"maximized"})');
+  const leaveBar = () => run("mini.document.dispatchEvent(new mini.KeyboardEvent('keydown', {key:'Escape', bubbles:true}))");
+  const turnBeforeMinimize = await run('JSON.stringify(state)');
+  // A fresh timer page has no activation from an in-page click before minimization.
+  await call('Page.reload', {}, page);
+  await until(() => evaluate(page, "document.readyState === 'complete' && typeof barBusy === 'boolean' && !navigator.userActivation.isActive", false));
+  for (const [left, top] of [[120, 90], [215, 150]]) {
+    const placed = await evaluate(worker, 'chrome.windows.update(' + popupId + ', {left:' + left + ', top:' + top + '})');
+    await evaluate(worker, 'chrome.windows.update(' + popupId + ', {state: "minimized"})', false);
+    await until(barReady);
+    await until(() => evaluate(worker, `chrome.windows.getAll().then(windows => windows.some(w =>
+      w.type === 'popup' && w.id !== ${popupId} && w.left === ${placed.left} && w.top === ${placed.top}))`));
+    assert.equal(await run('miniUI.count.textContent'), '2 / 2');
+    const bar = await presenterPopup();
+    const moved = await evaluate(worker, 'chrome.windows.update(' + bar.id + ', {left:' + (left + 75) + ', top:' + (top + 55) + '})');
+    await maximizeBar(bar.id);
+    await restored();
+    const original = await evaluate(worker, 'chrome.windows.get(' + popupId + ')');
+    assert.ok(matchesSize([original.left, original.top], [moved.left, moved.top]), 'Maximizing the bar returns the timer to its last position');
+    assert.ok(matchesSize([original.width, original.height], [placed.width, placed.height]),
+      'Timer size after close: ' + [original.width, original.height] + ', before minimize: ' + [placed.width, placed.height]);
+  }
+  assert.equal(await run('JSON.stringify(state)'), turnBeforeMinimize);
+  const beforeMaximize = await popupSize();
+  await evaluate(worker, 'chrome.windows.update(' + popupId + ', {state: "maximized"})');
+  await until(async () => await popupState() === 'maximized' && (await popupSize())[0] > initialPopupSize[0]);
+  await evaluate(worker, 'chrome.windows.update(' + popupId + ', {state: "minimized"})', false);
+  await until(barReady);
+  await maximizeBar((await presenterPopup()).id);
+  await restored();
+  await until(async () => matchesSize(await popupSize(), beforeMaximize)).catch(async error => {
+    throw new Error('Expected ' + beforeMaximize + ', restored ' + await popupSize(), {cause: error});
+  });
   await open();
   const barSize = () => run('[mini.outerWidth, mini.outerHeight]');
   const initialBarSize = await barSize();
-  const matchesSize = (actual, expected) => actual.every((value, axis) => Math.abs(value - expected[axis]) <= 2);
   const defaultBarSize = async () => matchesSize(await barSize(), initialBarSize);
   assert.ok(await run("mini.document.querySelector('[data-action=reset]').hidden"));
-  async function assertBarLayout() {
+  async function assertBarLayout(windowWidth) {
     await until(() => run("mini.getComputedStyle(mini.document.querySelector('.miniBar')).display === 'grid'"));
     const layout = await run(`(() => {
       const doc = mini.document;
@@ -244,17 +289,18 @@ test('presenter bar replaces the visible popup and restores the same meeting', {
       const boxes = Array.from(bar.children).slice(0, 3).map(child => child.getBoundingClientRect());
       return {width: mini.innerWidth, height: mini.innerHeight, scrollWidth: doc.documentElement.scrollWidth,
         scrollHeight: doc.documentElement.scrollHeight,
+        barHeight: bar.getBoundingClientRect().height, clockHeight: miniUI.clock.getBoundingClientRect().height,
         singleRow: boxes.every(box => Math.abs((box.top + box.bottom) / 2 - (boxes[0].top + boxes[0].bottom) / 2) < 1)};
     })()`);
     assert.ok(layout.singleRow && layout.scrollWidth <= layout.width && layout.scrollHeight <= layout.height &&
-      layout.width <= 400, 'The compact bar must fit one row independently of the main popup: ' + JSON.stringify(layout));
+      (windowWidth ?? layout.width) <= 400, 'The compact bar must fit one row independently of the main popup: ' + JSON.stringify(layout));
   }
   await assertBarLayout();
   assert.equal(await run('mini.document.documentElement.dataset.theme'), 'dark');
   await assertIcon('[data-action=run]', 'Pause', 'pause', 'mini.document');
   await assertIcon('[data-action=next]', 'Finish', 'stop', 'mini.document');
   await assertIcon('[data-action=undo]', 'Undo', 'undo', 'mini.document');
-  await assertIcon('[data-action=back]', 'Back to timer', 'back', 'mini.document');
+  assert.equal(await run("mini.document.querySelector('[data-action=back]')"), null);
   const initialClock = await run('miniUI.clock.textContent');
   await until(async () => await run('miniUI.clock.textContent') !== initialClock);
   await barClick('next');
@@ -276,22 +322,22 @@ test('presenter bar replaces the visible popup and restores the same meeting', {
   await assertBarLayout();
   const barFontSize = () => run('parseFloat(mini.getComputedStyle(miniUI.clock).fontSize)');
   const initialBarFontSize = await barFontSize();
-  await run('mini.resizeBy(110, 80)');
+  await run('mini.resizeBy(320, 150)');
   await until(() => run("!mini.document.querySelector('[data-action=reset]').hidden"));
-  assert.ok(await barFontSize() > initialBarFontSize, 'The clock must use the available space when the bar is enlarged');
+  assert.ok(await barFontSize() > Math.max(68, initialBarFontSize), 'The enlarged presenter clock grows beyond its former size limit');
   await assertIcon('[data-action=reset]', 'Restore default size', 'reset-size', 'mini.document');
   await barClick('reset');
   await until(defaultBarSize);
   assert.ok(await run("miniUI.count.textContent === '2 / 2' && miniUI.message.textContent === 'Paused'"));
-  await barClick('back');
+  await leaveBar();
   await restored();
   assert.equal(await run("el('status').textContent"), 'Paused');
   await open();
   await run('mini.resizeBy(110, 80)');
   await until(async () => (await barSize())[0] > initialBarSize[0]);
-  await run('documentPictureInPicture.window.close()');
+  await leaveBar();
   await restored();
-  await evaluate(worker, 'chrome.windows.update(' + popupId + ', {width: 660, height: 460})');
+  await evaluate(worker, 'chrome.windows.update(' + popupId + ', {left: 20, top: 20, width: 660, height: 460})');
   await open();
   await until(defaultBarSize);
   await assertBarLayout();
@@ -300,36 +346,42 @@ test('presenter bar replaces the visible popup and restores the same meeting', {
   await run(`history.replaceState(null, '', '#timer-resize');
     chrome.runtime.sendMessage = () => { throw new Error('Size reset must not contact the service worker'); };`);
   await click('#resetSize');
-  await until(async () => String(await popupSize()) === String(initialPopupSize));
+  await until(async () => matchesSize(await popupSize(), initialPopupSize));
   assert.equal(await run("el('status').textContent"), 'Paused');
   assert.ok(await run("!el('notice').textContent.includes('Could not restore the window size')"));
   await run("void Object.defineProperty(window, 'documentPictureInPicture', {configurable: true, value: undefined})");
-  await click('#mini');
+  await pressBarShortcut();
   await until(async () => await popupState() === 'minimized' && await run('!!miniUI'));
-  const fallbackViewport = () => run('[mini.innerWidth, mini.innerHeight]');
-  const fallbackBarSize = await barSize();
-  const initialViewport = await fallbackViewport();
+  const fallbackSize = () => evaluate(worker, `chrome.windows.getAll().then(windows => {
+    const bar = windows.find(window => window.type === 'popup' && window.id !== ${popupId});
+    return [bar.width, bar.height];
+  })`);
+  const fallbackBarSize = await fallbackSize();
   await assertBarLayout();
   await run('mini.resizeBy(132, 84)');
-  await until(() => run("!mini.document.querySelector('[data-action=reset]').hidden"));
+  await until(() => run("!mini.document.querySelector('[data-action=reset]').hidden")).catch(async error => {
+    const windows = await evaluate(worker, 'chrome.windows.getAll()');
+    throw new Error('Fallback size ' + JSON.stringify(fallbackBarSize) + ' → ' + JSON.stringify(await barSize()) +
+      ', windows ' + JSON.stringify(windows.map(w => [w.id, w.type, w.state, w.width, w.height])), {cause: error});
+  });
   await barClick('reset');
-  await until(async () => matchesSize(await barSize(), fallbackBarSize) &&
-    matchesSize(await fallbackViewport(), initialViewport) &&
+  await until(async () => matchesSize(await fallbackSize(), fallbackBarSize) &&
     await run("mini.document.querySelector('[data-action=reset]').hidden"));
-  await assertBarLayout();
-  await barClick('back');
+  // Verify native popup size even when the minimized opener reports its old viewport.
+  await assertBarLayout((await fallbackSize())[0]);
+  await leaveBar();
   await restored();
   await run('delete window.documentPictureInPicture');
   const resizeUrl = await run("chrome.runtime.getURL('index.html?resize-test=1')");
   await call('Page.navigate', {url: resizeUrl}, page);
   await until(() => run("location.search === '?resize-test=1' && document.readyState === 'complete' && !el('resetSize').hidden"));
   await evaluate(worker, 'chrome.windows.update(' + popupId + ', {state: "maximized"})');
-  await until(async () => await popupState() === 'maximized' && await run('outerWidth > ' + initialPopupSize[0]));
+  await until(async () => await popupState() === 'maximized' && (await popupSize())[0] > initialPopupSize[0]);
   await click('#resetSize');
-  await until(async () => await popupState() === 'normal' && String(await popupSize()) === String(initialPopupSize));
+  await until(async () => await popupState() === 'normal' && matchesSize(await popupSize(), initialPopupSize));
   await until(() => run("!el('resetSize').disabled"));
   assert.equal(await run("el('status').textContent"), 'Paused');
-  await evaluate(worker, 'chrome.windows.update(' + popupId + ', {width: 616, height: 450})');
+  await evaluate(worker, 'chrome.windows.update(' + popupId + ', {left: 20, top: 20, width: 616, height: 450})');
   await until(async () => await popupState() === 'normal' &&
     matchesSize(await popupSize(), [616, 450]) &&
     matchesSize(await run('[outerWidth, outerHeight]'), [616, 450]));
@@ -401,6 +453,19 @@ test('presenter bar replaces the visible popup and restores the same meeting', {
   }
 
   // Keep device emulation after the native popup input and PiP checks.
+  let priorSize = 0;
+  for (const [width, height] of [[600, 400], [1200, 800], [1000, 185], [280, 700]]) {
+    await call('Emulation.setDeviceMetricsOverride', {width, height, deviceScaleFactor: 1, mobile: false}, page);
+    await until(() => run('innerWidth === ' + width + ' && innerHeight === ' + height));
+    const size = await run("parseFloat(getComputedStyle(el('clock')).fontSize)");
+    if (width === 1200) assert.ok(size > 1.9 * priorSize, 'The main clock scales with the available space');
+    priorSize = size;
+    await assertStageFits();
+  }
+  await run('state = {...state, budget: 0, elapsed: 10000 * minute, started: null}; render()');
+  assert.equal(await run("el('clock').textContent"), '+10000:00');
+  await assertStageFits();
+  await run('state = savedScenarioState; render()');
   await run("state = {...state, index: 1, plan: 10 * minute, budget: 12 * minute}; render()");
   await call('Emulation.setDeviceMetricsOverride', {width: 280, height: 196, deviceScaleFactor: 1, mobile: false}, page);
   await until(() => run("innerWidth === 280"));
@@ -429,5 +494,100 @@ test('presenter bar replaces the visible popup and restores the same meeting', {
   await evaluate(regularPage, "el('resetSize').click()");
   assert.deepEqual(await evaluate(regularPage, '[outerWidth, outerHeight]'), regularSize);
   await evaluate(worker, 'chrome.tabs.remove(' + regularTab.id + ')');
+  await run('settings.close()');
+  await call('Emulation.clearDeviceMetricsOverride', {}, page);
+  await until(() => run('innerHeight > 154'));
+  await run('let testNow = new Date(2026, 0, 5, 14).getTime(); Date.now = () => testNow; state = meeting(2, testNow + 60 * minute); save()');
+  await click('#edit');
+  assert.equal(await run("el('wrapInput').value"), '0');
+  await run("el('wrapInput').value = 5");
+  await click('button[type=submit]');
+  assert.equal(await run('allocation(state, testNow)'), 1_650_000);
+  await click('#run');
+  await run('testNow += 25 * minute; render()');
+  await click('#next');
+  assert.equal(await run('state.budget'), 1_800_000);
+  assert.equal(await run("el('next').textContent"), 'Start wrap-up');
+  await run('testNow += 29 * minute');
+  await click('#next');
+  assert.deepEqual(await run("[el('speaker').textContent, el('clock').textContent, el('run').hidden]"), ['Wrap-up', '06:00', true]);
+  await click('#undo');
+  assert.equal(await run("el('speaker').textContent"), 'Speaker 2');
+  await run('testNow += 7 * minute');
+  await click('#next');
+  assert.equal(await run("el('clock').textContent"), '+01:00');
+  await click('#next');
+  assert.equal(await run('state.wrapMinutes'), 5);
+  await click('#undo');
+  assert.equal(await run("el('clock').textContent"), '+01:00');
+  await click('#undo');
+  assert.equal(await run("el('speaker').textContent"), 'Speaker 2');
+
+  await run('testNow = new Date(2026, 0, 5, 14, 54).getTime(); state = meeting(2, testNow + 6 * minute, 5); save()');
+  await open();
+  await barClick('run');
+  const choice = () => run("mini.document.querySelector('.speakerChoice')?.textContent");
+  async function choose(value) {
+    const reachable = await run(`(() => {
+      const doc = mini.document;
+      const button = doc.querySelector('.speakerChoice [value=${value}]');
+      const box = button.getBoundingClientRect();
+      if (!button.contains(doc.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2))) return false;
+      button.click();
+      return true;
+    })()`);
+    assert.ok(reachable, 'The compact presenter bar must expose the ' + value + ' choice');
+  }
+  assert.match(await choice(), /Keep: 00:30 each · 05:00 wrap-up/);
+  assert.match(await choice(), /Use: 01:00 each · 04:00 wrap-up/);
+  await run('advance(); toggle(); undo()');
+  assert.equal(await run('state.started'), null, 'An open presenter choice prevents stale changes from other actions');
+  await choose('cancel');
+  await until(() => run('speakerChoice === null'));
+  assert.equal(await run('state.started'), null);
+  await barClick('run');
+  await run('testNow += 6 * minute');
+  await choose('use');
+  await until(async () => (await choice())?.includes('Track the next speaker in overtime?'));
+  await choose('cancel');
+  await until(() => run('speakerChoice === null'));
+  assert.equal(await run('state.started'), null);
+  await run('testNow -= 6 * minute');
+  await barClick('run');
+  await choose('keep');
+  await until(() => run('state.budget === 30000'));
+  await run('testNow += 30 * 1000; render()');
+  await barClick('next');
+  await choose('use');
+  await until(() => run('state.budget === minute'));
+  assert.equal(await run('state.reserve'), 270_000);
+  await assertIcon('[data-action=next]', 'Start wrap-up', 'wrap', 'mini.document');
+  await run('testNow += 2 * minute; render()');
+  await barClick('next');
+  assert.deepEqual(await run('[miniUI.count.textContent, miniUI.clock.textContent, miniUI.run.hidden]'), ['Wrap-up', '03:30', true]);
+  await assertIcon('[data-action=next]', 'Finish', 'stop', 'mini.document');
+  await barClick('next');
+  await barClick('undo');
+  assert.equal(await run('miniUI.count.textContent'), 'Wrap-up');
+  await barClick('undo');
+  assert.equal(await run('miniUI.count.textContent'), '2 / 2');
+  await leaveBar();
+  await restored();
+  await evaluate(worker, 'chrome.windows.update(' + popupId + ', {state: "minimized"})', false);
+  await until(barReady);
+  const finalBar = await presenterPopup();
+  await closeBarWindow(finalBar.id);
+  const windowGone = id => evaluate(worker, 'chrome.windows.getAll().then(ws => ws.every(w => w.id !== ' + id + '))');
+  await until(() => windowGone(popupId));
+  assert.ok(await windowGone(finalBar.id), 'Close exits both the bar and the timer');
+
+  await evaluate(worker, 'openTimer()');
+  const freshTimer = await attach('/index.html');
+  await until(() => evaluate(freshTimer, 'document.readyState === "complete" && typeof openBar === "function"'));
+  const freshId = await evaluate(freshTimer, 'chrome.windows.getCurrent().then(w => w.id)');
+  await evaluate(freshTimer, 'openBar()');
+  await evaluate(freshTimer, 'documentPictureInPicture.window.close()');
+  await until(() => windowGone(freshId));
+  assert.ok(await evaluate(worker, 'chrome.windows.getAll().then(ws => ws.some(w => w.type === "normal"))'));
   await call('Browser.close', {});
 });
