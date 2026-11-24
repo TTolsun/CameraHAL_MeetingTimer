@@ -61,12 +61,12 @@ h1 { font-size: 16px; }
 #status { border: 1px solid var(--line); border-radius: 16px; padding: 3px 10px; font-size: 12px; font-weight: 600; }
 #clock, .miniClock { align-self: center; font-family: "Segoe UI Semibold","Segoe UI",sans-serif; font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1; }
 .clockFrame { display: grid; place-items: center; container-type: size; }
-#clock { font-size: min(19cqw, 95cqh, 84px); }
+#clock, .miniClock { font-size: min(calc(145cqw / var(--clock-length, 5)), 95cqh); white-space: nowrap; }
 #clock.over { color: var(--over); }
 #budget, #notice { font-size: 13px; color: var(--sub); min-height: 18px; }
 #notice { color: var(--primary); }
 #notice:empty, .stage:has(#notice:not(:empty)) #budget { display: none; }
-#segments { display: flex; gap: min(1%, 4px); }
+#segments:not([hidden]) { display: flex; gap: min(1%, 4px); }
 #segments i { flex: 1; border-radius: 2px; background: var(--hair); }
 #segments i.done { background: var(--sub); }
 #segments i.current { background: linear-gradient(to right, var(--sub) var(--progress), var(--hair) var(--progress)); }
@@ -75,17 +75,18 @@ h1 { font-size: 16px; }
 #run { width: 72px; }
 #next { width: 48px; }
 #next[hidden] { display: inline-block; visibility: hidden; }
+#next.start-wrap:not([hidden]) { width: auto; }
 #edit { margin-left: auto; }
 .icon-button { display: grid; place-items: center; width: 32px; height: 32px; padding: 0; }
 .icon-button[hidden] { display: none; }
 .reset-size { width: 26px; height: 26px; min-height: 26px; border-color: transparent; background: transparent; }
 .actions .icon-button { padding: 0; }
-#mini { display: inline-flex; align-items: center; justify-content: center; gap: 4px; }
 button svg {
   width: 18px; height: 18px; fill: none; stroke: currentColor;
   stroke-width: 2; stroke-linecap: round; stroke-linejoin: round;
 }
 @media (max-width: 365px) {
+  .actions:has(#next.start-wrap:not([hidden])) { flex-wrap: wrap; }
   .strip {
     grid-template-columns: 1fr auto; grid-template-areas: "now end" "delta left";
     grid-template-rows: 20px 18px; padding: 2px 8px;
@@ -99,22 +100,26 @@ dialog h2 { margin: 0; font-size: 18px; }
 .dialogHead { justify-content: space-between; }
 .dialogHead button, .dialogActions button { min-height: 28px; }
 .dialogHead button { width: 28px; height: 28px; }
-.settingFields { display: grid; grid-template-columns: minmax(0, 1fr) minmax(72px, .58fr); gap: 10px; margin-top: 4px; }
+.settingFields { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, .8fr) minmax(0, 1fr); gap: 6px; margin-top: 4px; }
 input { display: block; width: 100%; min-height: 28px; padding: 2px 4px; margin-top: 2px; }
 .dialogFoot { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; margin-top: 6px; }
 #settingHint { color: var(--sub); font-size: 12px; line-height: 1.25; }
 .dialogActions { gap: 4px; }
 .dialogActions button { white-space: nowrap; padding-inline: 8px; }
+.speakerChoice .dialogActions { justify-content: flex-end; flex-wrap: wrap; margin-top: 5px; }
+.speakerChoice p:empty { display: none; }
+.miniBar ~ .speakerChoice { padding-block: 4px; font-size: 12px; line-height: 1.2; }
+.miniBar ~ .speakerChoice .dialogActions button { min-height: 24px; padding-inline: 5px; }
 .miniBar {
+  position: fixed; inset: 0;
   display: grid; grid-template-columns: 52px minmax(0, 1fr) auto;
-  align-items: center; min-height: 100dvh; padding: 1px 8px 4px; gap: 6px;
+  grid-template-rows: minmax(0, 1fr);
+  align-items: center; padding: 1px 8px 4px; gap: 6px;
   background: var(--strip); color: white;
 }
 .barState { min-width: 0; white-space: nowrap; }
 .count { display: block; font-size: 13px; line-height: 1.1; font-variant-numeric: tabular-nums; }
-.miniClockFrame { display: grid; place-items: center; container-type: inline-size; min-width: 0; }
-.miniClock { font-size: min(26cqw, max(28px, 42dvh), 68px); text-align: center; white-space: nowrap; }
-.miniClock.wide { font-size: min(20cqw, max(28px, 42dvh), 68px); }
+.miniClockFrame { display: grid; place-items: center; align-self: stretch; container-type: size; min-width: 0; }
 .miniClock.over { color: #ebb186; }
 .message { display: block; color: #c2c2c2; font-size: 10px; line-height: 1.2; }
 .controls { justify-content: flex-end; gap: 2px; }
@@ -129,8 +134,6 @@ input { display: block; width: 100%; min-height: 28px; padding: 2px 4px; margin-
   #run { width: 60px; }
   #next { width: 36px; }
   .actions .icon-button { width: 28px; }
-  #mini { gap: 3px; padding-inline: 4px; font-size: 12px; }
-  #mini svg { width: 15px; }
 }
 @media (max-width: 280px) {
   .miniBar { padding-inline: 4px; }

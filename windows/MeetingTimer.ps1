@@ -49,6 +49,21 @@ public static class MtNative {
     }
 }
 
+public class MtTimerForm : Form {
+    public event EventHandler SwitchViewRequested;
+
+    protected override void WndProc(ref Message message) {
+        const int WM_SYSCOMMAND = 0x0112, SC_MINIMIZE = 0xF020, SC_MAXIMIZE = 0xF030;
+        long command = message.WParam.ToInt64() & 0xFFF0;
+        if (message.Msg == WM_SYSCOMMAND && SwitchViewRequested != null &&
+            ((MinimizeBox && command == SC_MINIMIZE) || (MaximizeBox && command == SC_MAXIMIZE))) {
+            SwitchViewRequested(this, EventArgs.Empty);
+            return;
+        }
+        base.WndProc(ref message);
+    }
+}
+
 // Flicker-free surface that the script paints itself.
 public class MtCanvas : Panel {
     public MtCanvas() {
@@ -153,17 +168,14 @@ public class MtButton : Button {
                 case "stop":
                     g.FillRectangle(brush, x-r, y-r, r*2, r*2);
                     break;
+                case "wrap":
+                    g.DrawEllipse(pen, x-r, y-r, r*2, r*2);
+                    g.DrawLine(pen, x, y-r*0.6f, x, y);
+                    g.DrawLine(pen, x, y, x+r*0.5f, y+r*0.3f);
+                    break;
                 case "undo":
                     g.DrawArc(pen, x-r, y-r*0.3f, r*2, r*1.3f, 180, 250);
                     g.FillPolygon(brush, new PointF[] { new PointF(x-r*1.2f,y+r*0.35f), new PointF(x-r*0.4f,y-r*0.25f), new PointF(x-r*0.4f,y+r*0.95f) });
-                    break;
-                case "window":
-                    g.DrawRectangle(pen, x-r, y-r*0.8f, r*2, r*1.6f);
-                    g.DrawLine(pen, x-r, y-r*0.25f, x+r, y-r*0.25f);
-                    break;
-                case "presenter-bar":
-                    g.DrawRectangle(pen, x-r, y-r*0.8f, r*2, r*1.6f);
-                    g.FillRectangle(brush, x-r, y+r*0.25f, r*2, r*0.55f);
                     break;
             }
         }
@@ -216,8 +228,8 @@ $Themes = @{
         BtnInk = '#121212'; BtnInkText = '#f4f4f6'; BtnInkLine = '#3a3d3f'; BtnInkHover = '#1c1c1d'; BtnInkPress = '#242728'
     }
 }
-$NoColor = [Drawing.Color]::Empty
 $C = $Themes.light
+$NoColor = [Drawing.Color]::Empty
 
 $installed = @((New-Object Drawing.Text.InstalledFontCollection).Families | ForEach-Object { $_.Name })
 function Pick-Font([string[]]$cands, [string]$fallback) {
@@ -247,7 +259,7 @@ function FN([double]$px)  { Font-Px $famNum ($px * $script:Scale) $numStyle }
 
 # ---------------- config ----------------
 function Load-Config {
-    $cfg = [pscustomobject]@{ Count = 6; TopMost = $true; Theme = 'light'; Bar = $false }
+    $cfg = [pscustomobject]@{ Count = 6; TopMost = $true; Theme = 'light'; Bar = $false; WrapMinutes = 0 }
     # config.json is treated as untrusted data: plain JSON only (no object
     # deserialization), size-capped, and every field type- and range-checked.
     # Anything unexpected falls back to the defaults above.
@@ -264,6 +276,7 @@ function Load-Config {
         if ($raw -and $raw.Value -is [int] -and [int]::TryParse("$($raw.Value)", [ref]$n) -and $n -ge 1 -and $n -le 50) { $cfg.Count = $n }
         if ($j.TopMost -is [bool]) { $cfg.TopMost = $j.TopMost }
         if ($j.Bar -is [bool]) { $cfg.Bar = $j.Bar }
+        if ($j.WrapMinutes -is [int] -and $j.WrapMinutes -ge 0 -and $j.WrapMinutes -le 59) { $cfg.WrapMinutes = $j.WrapMinutes }
         # Only the two known theme names are accepted; anything else keeps the default.
         if ($j.Theme -is [string] -and ($j.Theme -ceq 'light' -or $j.Theme -ceq 'dark')) { $cfg.Theme = $j.Theme }
     } catch { }
@@ -279,6 +292,7 @@ function Save-Config {
         TopMost  = [bool]$script:TopMostPref
         Bar      = [bool]$script:BarMode
         Theme    = [string]$script:ThemeName
+        WrapMinutes = [int]$script:WrapMinutes
     } | ConvertTo-Json
     [void][IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($script:ConfigFile))
     [IO.File]::WriteAllText($script:ConfigFile, $json, (New-Object Text.UTF8Encoding $false))
@@ -291,6 +305,7 @@ $script:ThemeName = $script:Cfg.Theme
 $C = $Themes[$script:ThemeName]
 $script:Sw = New-Object System.Diagnostics.Stopwatch
 $script:People = @()
+
 # ---------------- drawing helpers ----------------
 function Draw-Text($g, [string]$text, $font, $color, [int]$x, [int]$y, [int]$w, [int]$h, [string]$align = 'Left') {
     $f = [Windows.Forms.TextFormatFlags]'VerticalCenter, SingleLine, EndEllipsis, NoPadding'
@@ -384,13 +399,13 @@ function Get-MinClientWidth {
     $topBar = Get-StripNeed $false 'May run over'
     $band = (S 16) + (S $script:RunW) + (S 6) + (S $script:NextW) + (S 6) + (S 68) + (S 10) + (S 68) + (S 16)
     $head = (S 20) * 2 + (Measure-W 'Speaker 50' (FKM 16)) + (Measure-W 'Overtime · Paused' (FKM 12)) + (S 18)
-    $msgs = @('59 min 59 sec left', $script:MsgPause, ($script:MsgIdle -f '00:00'), $script:MsgUndo, $script:MsgFinish)
+    $msgs = @('59 min 59 sec left', 'Meeting end time reached', $script:MsgPause, ($script:MsgIdle -f '00:00'), $script:MsgUndo, $script:MsgFinish)
     $coach = (S 20) * 2 + (($msgs | ForEach-Object { Measure-W $_ (FKM 13) } | Measure-Object -Maximum).Maximum)
     [math]::Max([math]::Max($topBar, $band), [math]::Max($head, $coach))
 }
 
 # ---------------- window ----------------
-$form = New-Object Windows.Forms.Form
+$form = New-Object MtTimerForm
 $form.Text = 'Time per Turn'
 $form.ClientSize = New-Object Drawing.Size((S 380), (S 328))
 $form.MinimumSize = New-Object Drawing.Size(((Get-MinClientWidth) + ($form.Width - $form.ClientSize.Width)), (S 328))
@@ -488,6 +503,7 @@ function Paint-Strip($g) {
     }
 
     # Change versus the first plan, centered between the clock and the end time.
+    if ($null -ne $script:WrapStart) { return }
     $pd = Get-PlanDelta
     $dw = Measure-W $pd.Text (FN 14)
     $mid = [int](($leftEnd + $rightStart) / 2)
@@ -536,6 +552,13 @@ function Test-FinishHint($state) {
 
 function Get-BarMessage($state) {
     if (Test-FinishHint $state) { return $script:MsgBarFinish }
+    if ($state.Run -eq 'wrap') {
+        if ($state.Rem -le 0) { return 'Overtime' }
+        return 'Ends {0:HH:mm}' -f $script:End
+    }
+    if ($state.Run -eq 'run' -and $script:WrapMinutes -gt 0 -and $script:Idx -eq $script:People.Count - 1) {
+        return 'Next: wrap-up'
+    }
     if ($state.Run -eq 'pause') { return $script:MsgPause }
     if ($state.Level -eq 'over') { return '' }
     if ($state.Run -eq 'idle') { return 'Ready' }
@@ -555,43 +578,61 @@ function Paint-Bar($g) {
     $g.Clear($C.Strip)
     $dc = Get-ClockColor $st $true
     $msg = Get-BarMessage $st
+    $firstRow = $H - (S 46)
+    if ($st.Run -eq 'wrap') {
+        $narrow = $W -lt (S $script:BarTwoRowWidth)
+        $height = if ($narrow) { $firstRow } else { $H - (S 4) }
+        $right = if ($narrow) { $W } else { $btnBarRun.Left - (S 58) }
+        Draw-Text $g 'Wrap-up' (FKM 16) $C.StripInk (S 12) 0 (S 86) $height
+        Draw-Clock $g $st.Text $dc (S 98) 0 ($right - (S 110)) $height
+        if ($narrow) {
+            Draw-Text $g $msg (FKM 12) $C.StripMute (S 12) $firstRow (S 130) (S 40)
+        } else {
+            Draw-Text $g $msg (FKM 12) $C.StripMute $right 0 (S 83) $height
+        }
+        $th = S 4
+        $ratio = if ($st.Budget -gt 0) { [math]::Min(1.0, $st.El / $st.Budget) } else { 1.0 }
+        Fill-Round $g $C.BarTrack 0 ($H - $th) $W $th 0
+        Fill-Round $g $C.StripMute 0 ($H - $th) ($W * [math]::Max(0, $ratio)) $th 0
+        return
+    }
     $head = '{0} / {1}' -f ($script:Idx + 1), $script:People.Count
     if ($W -lt (S $script:BarTwoRowWidth)) {
         # In a narrow window the speaker numbers and clock share the top row.
         $pad = S 8
         $speakerW = S 140
         $clockX = $pad + $speakerW
-        Paint-BarSpeakers $g $pad $speakerW (S 42)
+        Paint-BarSpeakers $g $pad $speakerW $firstRow
         $clockW = $W - $clockX - $pad
         if ($msg -eq $script:MsgBarFinish) {
-            Draw-Text $g $st.Text (FN 23) $dc $clockX 0 $clockW (S 27) 'Center'
-            Draw-Text $g $msg (FKM 12) $C.StripInk $clockX (S 24) $clockW (S 18) 'Center'
+            Draw-Clock $g $st.Text $dc $clockX 0 $clockW ($firstRow - (S 18))
+            Draw-Text $g $msg (FKM 12) $C.StripInk $clockX ($firstRow - (S 18)) $clockW (S 18) 'Center'
             $msg = ''
         } else {
-            Draw-Text $g $st.Text (FN 28) $dc $clockX 0 $clockW (S 42) 'Center'
+            Draw-Clock $g $st.Text $dc $clockX 0 $clockW $firstRow
         }
         $headW = S 72
-        Draw-Text $g $head (FKM 14) $C.StripInk $pad (S 42) $headW (S 40) 'Center'
+        Draw-Text $g $head (FKM 14) $C.StripInk $pad $firstRow $headW (S 40) 'Center'
         $messageX = $pad + $headW + (S 4)
         $messageW = $btnBarRun.Left - $messageX - $pad
         if ($messageW -gt (S 40)) {
-            Draw-Text $g $msg (FKM 12) $C.StripMute $messageX (S 42) $messageW (S 40)
+            Draw-Text $g $msg (FKM 12) $C.StripMute $messageX $firstRow $messageW (S 40)
         }
     } else {
         $headW = S 72
-        $clockW = S 134
         $speakerW = S 146
         $pad = S 12
         Draw-Text $g $head (FKM 15) $C.StripInk $pad 0 $headW ($H - (S 4)) 'Center'
         Paint-BarSpeakers $g ($pad + $headW) $speakerW ($H - (S 4))
         $clockX = $pad + $headW + $speakerW
+        $clockW = [math]::Max((S 134), $btnBarRun.Left - $clockX - (S 145))
         $messageX = $clockX + $clockW
         $messageW = $btnBarRun.Left - $messageX - (S 8)
         if ($msg -eq $script:MsgBarFinish -and $messageW -lt (Measure-W $msg (FKM 12))) {
-            Draw-Text $g $st.Text (FN 28) $dc $clockX 0 $clockW (S 36) 'Center'
-            Draw-Text $g $msg (FKM 12) $C.StripInk $clockX (S 33) $clockW (S 19) 'Center'
+            Draw-Clock $g $st.Text $dc $clockX 0 $clockW ($H - (S 23))
+            Draw-Text $g $msg (FKM 12) $C.StripInk $clockX ($H - (S 23)) $clockW (S 19) 'Center'
         } else {
-            Draw-Text $g $st.Text (FN 32) $dc $clockX 0 $clockW ($H - (S 4)) 'Center'
+            Draw-Clock $g $st.Text $dc $clockX 0 $clockW ($H - (S 4))
             if ($messageW -gt (S 40)) {
                 Draw-Text $g $msg (FKM 12) $C.StripMute $messageX 0 $messageW ($H - (S 4))
             }
@@ -620,6 +661,12 @@ function Get-StageClockFont([string]$text, [int]$width, [int]$height) {
     $font
 }
 
+function Draw-Clock($g, [string]$text, $color, [int]$x, [int]$y, [int]$width, [int]$height) {
+    if ($width -le 0 -or $height -le 0) { return }
+    $font = Get-StageClockFont $text $width $height
+    Draw-Text $g $text $font $color $x $y $width $height 'Center'
+}
+
 function Paint-Stage($g) {
     if ($script:BarMode) { Paint-Bar $g; return }
     $W = $stage.ClientSize.Width; $H = $stage.ClientSize.Height
@@ -629,14 +676,14 @@ function Paint-Stage($g) {
     $pad = S 20
     $cw = $W - 2 * $pad
 
-    $head = 'Speaker {0}' -f ($script:Idx + 1)
+    $head = if ($st.Run -eq 'wrap') { 'Wrap-up' } else { 'Speaker {0}' -f ($script:Idx + 1) }
     $hw = Measure-W $head (FKM 16)
     Draw-Text $g $head (FKM 16) $C.Ink $pad (S 14) ($hw + 2) (S 26)
     if ($st.Level -eq 'over') {
         $bt = if ($st.Run -eq 'pause') { 'Overtime · Paused' } else { 'Overtime' }
         $bc = $C.Sub; $bb = $C.IdleLine
     } else {
-        $bt = switch ($st.Run) { 'run' { 'Running' } 'pause' { 'Paused' } default { 'Ready' } }
+        $bt = switch ($st.Run) { 'run' { 'Running' } 'wrap' { 'Running' } 'pause' { 'Paused' } default { 'Ready' } }
         $bc = $C.Ink; $bb = $C.IdleLine
     }
     [void](Draw-PillRight $g $bt (FKM 12) $NoColor $bc $bb ($W - $pad) (S 15) (S 24))
@@ -644,19 +691,22 @@ function Paint-Stage($g) {
     $top = S 40
     $bottom = $H - (S 38)
     $dh = [math]::Max((S 30), $bottom - $top)
-    $clockFont = Get-StageClockFont $st.Text $W $dh
-    Draw-Text $g $st.Text $clockFont (Get-ClockColor $st) 0 $top $W $dh 'Center'
+    Draw-Clock $g $st.Text (Get-ClockColor $st) 0 $top $W $dh
 
     $mc = $C.Sub
-    if (Test-FinishHint $st) { $msg = $script:MsgFinish; $mc = $C.Accent }
+    if ($st.Run -eq 'wrap') {
+        $msg = if ($st.Rem -gt 0) { Get-RemainingMessage $st.Rem } else { 'Meeting end time reached' }
+    }
+    elseif (Test-FinishHint $st) { $msg = $script:MsgFinish; $mc = $C.Accent }
     elseif ($st.Level -eq 'over' -or $st.Run -eq 'pause') { $msg = '' }
     elseif ($st.Closing) { $msg = Get-RemainingMessage $st.Rem }
     elseif (Test-UndoHint) { $msg = $script:MsgUndo; $mc = $C.Accent }
-    elseif ($st.Run -eq 'idle' -and $st.Budget -le 0) { $msg = 'Press Start to track overtime' }
+    elseif ($st.Run -eq 'idle' -and (Get-MeetingLeft) -le 0) { $msg = 'Press Start to track overtime' }
     elseif ($st.Run -eq 'idle') { $msg = $script:MsgIdle -f (Fmt $st.Budget) }
     else { $msg = 'Allocated {0}' -f (Fmt $st.Budget) }
     Draw-Text $g $msg (FKM 13) $mc $pad $bottom $cw (S 22) 'Center'
 
+    if ($st.Run -eq 'wrap') { return }
     $n = $script:People.Count
     $gap = if ($n -gt 12) { S 2 } else { S 4 }
     $segW = ($cw - $gap * ($n - 1)) / $n
@@ -683,25 +733,30 @@ function Refresh-All {
     $st = Get-Phase
     $btnRun.Text = switch ($st.Run) { 'run' { 'Pause' } 'pause' { 'Resume' } default { 'Start' } }
     $isLast = $script:Idx -ge $script:People.Count - 1
-    $btnNext.Text = if ($isLast) { 'Finish' } else { 'Next' }
+    $wrapping = $st.Run -eq 'wrap'
+    $startWrap = $isLast -and $script:WrapMinutes -gt 0 -and -not $wrapping
+    $btnNext.Text = if ($startWrap) { 'Wrap-up' } elseif ($isLast) { 'Finish' } else { 'Next' }
+    $btnRun.Visible = -not $wrapping
     # Next/finish only while the clock runs: hidden before the start and while paused.
-    $btnNext.Visible = $script:Sw.IsRunning
+    $btnNext.Visible = $script:Sw.IsRunning -or $wrapping
     $btnUndo.Enabled = Test-UndoAllowed
     $btnBarRun.Text = $btnRun.Text
-    $btnBarNext.Text = $btnNext.Text
+    $btnBarRun.Visible = $script:BarMode -and -not $wrapping
+    $btnBarNext.Text = if ($startWrap) { 'Start wrap-up' } else { $btnNext.Text }
     $btnBarRun.Glyph = if ($script:Sw.IsRunning) { 'pause' } else { 'play' }
-    $btnBarNext.Glyph = if ($isLast) { 'stop' } else { 'next' }
-    $nextTip = if ($isLast) { 'Finish the meeting (N / →)' } else { 'Start the next speaker (N / →)' }
+    $btnBarNext.Glyph = if ($startWrap) { 'wrap' } elseif ($isLast) { 'stop' } else { 'next' }
+    $nextTip = if ($startWrap) { 'Start wrap-up (N / →)' } elseif ($isLast) { 'Finish the meeting (N / →)' } else { 'Start the next speaker (N / →)' }
     if ($tips.GetToolTip($btnNext) -ne $nextTip) {
         $tips.SetToolTip($btnNext, $nextTip)
     }
-    $btnBarNext.Enabled = $script:Sw.IsRunning
+    $btnBarNext.Enabled = $script:Sw.IsRunning -or $wrapping
     $btnBarUndo.Enabled = Test-UndoAllowed
     if ($script:BarMode) { Layout-BarControls }
     # The title doubles as the taskbar label while minimized.
     $speaker = $script:Idx + 1
     if ($script:BarMode) { $speaker = '{0}/{1}' -f $speaker, $script:People.Count }
-    $form.Text = '{0} · Speaker {1} · Time per Turn' -f $st.Text, $speaker
+    $head = if ($wrapping) { 'Wrap-up' } else { "Speaker $speaker" }
+    $form.Text = '{0} · {1} · Time per Turn' -f $st.Text, $head
     $strip.Invalidate()
     $stage.Invalidate()
 }
@@ -718,11 +773,11 @@ Continue and track overtime?" 'End time reached'
 }
 
 function Toggle-Run {
-    if (Switch-RunState -ConfirmOvertime ${function:Confirm-Overtime}) { Refresh-All }
+    if (Switch-RunState -ConfirmOvertime ${function:Confirm-Overtime} -ChooseWrap ${function:Choose-WrapReserve}) { Refresh-All }
 }
 
 function Go-Next {
-    if (Move-ToNextSpeaker -ConfirmOvertime ${function:Confirm-Overtime}) { Refresh-All }
+    if (Move-ToNextSpeaker -ConfirmOvertime ${function:Confirm-Overtime} -ChooseWrap ${function:Choose-WrapReserve}) { Refresh-All }
 }
 
 function Reset-Current {
@@ -748,6 +803,45 @@ function New-DlgLabel([string]$text, $font, $color, [int]$x, [int]$y, [int]$w, [
     $l.ForeColor = $color
     $l.SetBounds((S $x), (S $y), (S $w), (S $h))
     $l
+}
+
+function Choose-WrapReserve($options) {
+    $palette = $Themes.light
+    $dialog = New-Object Windows.Forms.Form
+    try {
+        $dialog.Name = 'WrapChoice'
+        $dialog.Text = 'Available speaker time'
+        $dialog.StartPosition = 'CenterParent'
+        $dialog.FormBorderStyle = 'FixedDialog'
+        $dialog.MaximizeBox = $false
+        $dialog.MinimizeBox = $false
+        $dialog.ShowInTaskbar = $false
+        $dialog.BackColor = $palette.Paper
+        $body = @(
+            ('{0} remaining. Estimated time at the planned end:' -f $options.Count)
+            ''
+            ('Keep wrap-up: {0} per speaker, {1} for wrap-up.' -f (Fmt $options.KeepShare), (Fmt $options.KeepReserve))
+            ('Use wrap-up time: {0} per speaker, {1} for wrap-up.' -f (Fmt $options.UseShare), (Fmt $options.Reserve))
+        ) -join [Environment]::NewLine
+        $label = New-DlgLabel $body (FK 14) $palette.Ink 20 20 352 118
+        $cancel = New-Button 'Cancel' 'quiet' 72 36 {} $palette
+        $cancel.DialogResult = 'Cancel'
+        $cancel.Location = New-Object Drawing.Point((S 20), (S 142))
+        $keep = New-Button 'Keep wrap-up' 'outline' 112 36 {} $palette
+        $keep.DialogResult = 'No'
+        $keep.Location = New-Object Drawing.Point((S 100), (S 142))
+        $use = New-Button 'Use wrap-up time' 'primary' 144 36 {} $palette
+        $use.DialogResult = 'Yes'
+        $use.Location = New-Object Drawing.Point((S 220), (S 142))
+        $dialog.CancelButton = $cancel
+        $dialog.Controls.AddRange(@($label, $cancel, $keep, $use))
+        $dialog.ClientSize = New-Object Drawing.Size((S 392), (S 198))
+        switch ($dialog.ShowDialog($form)) {
+            'No' { 'keep' }
+            'Yes' { 'use' }
+            default { 'cancel' }
+        }
+    } finally { $dialog.Dispose() }
 }
 
 function Show-ScheduleNotice([string]$reason) {
@@ -782,9 +876,13 @@ function Update-SettingsHint {
     $end = $script:SetProposedEnd
     $count = [int]$script:SetNum.Value
     $script:SetEndLabel.Text = if ($end.Date -gt (Get-Date).Date) { 'End time (tomorrow)' } else { 'End time' }
-    $capacity = [math]::Min(50, [math]::Max(0, [math]::Floor(($end - (Get-Date)).TotalSeconds / $script:MinShare)))
+    $minutesLeft = ($end - (Get-Date)).TotalMinutes
+    $capacity = [math]::Min(50, [math]::Max(0, [math]::Floor($minutesLeft)))
     $script:SetHint.Text = if ($capacity -eq 0) { 'Allow at least 1 min to start a meeting.' }
         elseif ($count -gt $capacity) { 'Capacity: {0}. Choose fewer speakers or a later end time.' -f $capacity }
+        elseif ($script:SetWrap.Value -gt 0 -and $count + $script:SetWrap.Value -gt $minutesLeft) {
+            'This schedule may require shorter turns or using some wrap-up time.'
+        }
         else { 'Capacity: {0} (1 min per speaker).' -f $capacity }
 }
 
@@ -792,7 +890,7 @@ function Show-Settings {
     $dlg = New-Object Windows.Forms.Form
     $dlg.Name = 'Settings'
     $dlg.Text = 'Meeting settings'
-    $dlg.ClientSize = New-Object Drawing.Size((S 340), (S 420))
+    $dlg.ClientSize = New-Object Drawing.Size((S 340), (S 488))
     $dlg.StartPosition = 'CenterParent'
     $dlg.FormBorderStyle = 'FixedDialog'
     $dlg.MaximizeBox = $false
@@ -832,10 +930,21 @@ function Show-Settings {
     $dt.SetBounds((S 172), (S 98), (S 120), (S 32))
 
     $h1 = New-DlgLabel '' (FK 12) $L.Sub 24 132 292 44
-    $resetHint = New-DlgLabel "Changing the speaker count or end time clears the timer and returns to Speaker 1." (FK 13) $L.Ink 24 176 292 48
+    $wrapLabel = New-DlgLabel 'Wrap-up (min)' (FKM 14) $L.Ink 24 176 292 22
+    $wrap = New-Object Windows.Forms.NumericUpDown
+    $wrap.Name = 'WrapMinutes'
+    $wrap.AccessibleName = 'Wrap-up minutes'
+    $wrap.TabIndex = 2
+    $wrap.Minimum = 0
+    $wrap.Maximum = 59
+    $wrap.Value = $script:WrapMinutes
+    $wrap.Font = FK 15
+    $wrap.SetBounds((S 24), (S 202), (S 120), (S 32))
+    $resetHint = New-DlgLabel "Changing speakers, end time, or wrap-up starts a new meeting." (FK 13) $L.Ink 24 244 292 48
     $script:SetNum = $num
     $script:SetDt = $dt
     $script:SetHint = $h1
+    $script:SetWrap = $wrap
     $num.add_Increasing({
         param($sender, $eventArgs)
         $issue = Get-ScheduleIssue ([long]$sender.Value + 1) $script:SetProposedEnd
@@ -845,6 +954,7 @@ function Show-Settings {
         }
     })
     $num.add_ValueChanged({ Update-SettingsHint })
+    $wrap.add_ValueChanged({ Update-SettingsHint })
     $dt.add_ValueChanged({
         $script:SetProposedEnd = Resolve-EndTime $script:SetDt.Value $script:End
         Update-SettingsHint
@@ -852,12 +962,12 @@ function Show-Settings {
     Update-SettingsHint
 
     $cbTop = New-Object Windows.Forms.CheckBox
-    $cbTop.TabIndex = 2
+    $cbTop.TabIndex = 3
     $cbTop.Text = 'Always on top'
     $cbTop.Font = FK 14
     $cbTop.ForeColor = $L.Ink
     $cbTop.Checked = $script:TopMostPref
-    $cbTop.SetBounds((S 24), (S 232), (S 292), (S 26))
+    $cbTop.SetBounds((S 24), (S 300), (S 292), (S 26))
 
     $script:SetDlg = $dlg
     $script:SetStartOver = $false
@@ -872,13 +982,13 @@ function Show-Settings {
             $script:SetProposedEnd = $defaultEnd; $script:SetStartOver = $true; $script:SetDlg.DialogResult = 'OK'; $script:SetDlg.Close()
         }
     } $L
-    $restart.TabIndex = 3
-    $restart.Location = New-Object Drawing.Point((S 24), (S 282))
-    $h2 = New-DlgLabel "Clear all turns and restore the default end time." (FK 12) $L.Sub 156 280 170 40
+    $restart.TabIndex = 4
+    $restart.Location = New-Object Drawing.Point((S 24), (S 350))
+    $h2 = New-DlgLabel "Clear all turns and restore the default end time." (FK 12) $L.Sub 156 348 170 40
 
     $save = New-Button 'Save' 'primary' 92 44 {
         $count = [int]$script:SetNum.Value
-        if ($count -ne $script:People.Count -or $script:SetProposedEnd -ne $script:End) {
+        if ($count -ne $script:People.Count -or $script:SetProposedEnd -ne $script:End -or $script:SetWrap.Value -ne $script:WrapMinutes) {
             $issue = Get-ScheduleIssue $count $script:SetProposedEnd
             if ($issue) {
                 Show-ScheduleNotice $issue
@@ -889,22 +999,22 @@ function Show-Settings {
         $script:SetDlg.DialogResult = 'OK'
         $script:SetDlg.Close()
     } $L
-    $save.TabIndex = 5
+    $save.TabIndex = 6
     $dlg.AcceptButton = $save
-    $save.Location = New-Object Drawing.Point((S 224), (S 352))
+    $save.Location = New-Object Drawing.Point((S 224), (S 420))
     $cancel = New-Button 'Cancel' 'outline' 84 44 { $script:SetDlg.DialogResult = 'Cancel'; $script:SetDlg.Close() } $L
-    $cancel.TabIndex = 4
+    $cancel.TabIndex = 5
     $dlg.CancelButton = $cancel
-    $cancel.Location = New-Object Drawing.Point((S 132), (S 352))
+    $cancel.Location = New-Object Drawing.Point((S 132), (S 420))
 
-    $dlg.Controls.AddRange(@($title, $l1, $num, $l2, $dt, $h1, $resetHint, $cbTop, $restart, $h2, $cancel, $save))
+    $dlg.Controls.AddRange(@($title, $l1, $num, $l2, $dt, $h1, $wrapLabel, $wrap, $resetHint, $cbTop, $restart, $h2, $cancel, $save))
 
     if ($dlg.ShowDialog($form) -eq 'OK') {
         $script:TopMostPref = $cbTop.Checked
         $form.TopMost = $script:TopMostPref -or $script:BarMode
         $count = [int]$num.Value
-        if ($script:SetStartOver -or $count -ne $script:People.Count -or $script:SetProposedEnd -ne $script:End) {
-            Start-Meeting $count $script:SetProposedEnd
+        if ($script:SetStartOver -or $count -ne $script:People.Count -or $script:SetProposedEnd -ne $script:End -or $wrap.Value -ne $script:WrapMinutes) {
+            Start-Meeting $count $script:SetProposedEnd -WrapMinutes ([int]$wrap.Value)
         }
         try { Save-Config } catch { }
         Refresh-All
@@ -919,9 +1029,7 @@ $btnUndo = New-Button 'Undo' 'quiet' 68 36 { Undo-Last }
 $btnSet = New-Button 'Settings' 'quiet' 68 36 { Show-Settings }
 $btnLight = New-Button '☀' 'quiet' 32 30 { Choose-Theme 'light' }
 $btnDark = New-Button '☾' 'quiet' 32 30 { Choose-Theme 'dark' }
-$btnBar = New-Button 'Presenter bar' 'quiet' 32 30 { Toggle-BarMode }
-$btnBar.Glyph = 'presenter-bar'
-$normalButtons = @($btnRun,$btnNext,$btnUndo,$btnSet,$btnLight,$btnDark,$btnBar)
+$normalButtons = @($btnRun,$btnNext,$btnUndo,$btnSet,$btnLight,$btnDark)
 $band.Controls.AddRange($normalButtons)
 $tips = New-Object Windows.Forms.ToolTip
 $tab = 0
@@ -933,16 +1041,13 @@ $btnDark.AccessibleName = 'Dark theme'
 $tips.SetToolTip($btnRun, 'Start / pause (Space)')
 $tips.SetToolTip($btnUndo, 'Undo the last advance, finish, or reset (Ctrl+Z)')
 $tips.SetToolTip($btnSet, 'Set the speaker count, end time, and window behavior (S)')
-$tips.SetToolTip($btnBar, 'Presenter bar for screen sharing (B)')
 $tips.SetToolTip($btnLight, 'Light theme')
 $tips.SetToolTip($btnDark, 'Dark theme')
 $btnBarRun = New-Button 'Start' 'primary' 56 28 { Toggle-Run }
 $btnBarNext = New-Button 'Next' 'ink' 48 28 { Go-Next }
 $btnBarUndo = New-Button 'Undo' 'quiet' 64 28 { Undo-Last }
-$btnBarBack = New-Button 'Main window' 'quiet' 64 28 { Toggle-BarMode }
 $btnBarUndo.Glyph = 'undo'
-$btnBarBack.Glyph = 'window'
-$barButtons = @($btnBarRun,$btnBarNext,$btnBarUndo,$btnBarBack)
+$barButtons = @($btnBarRun,$btnBarNext,$btnBarUndo)
 foreach ($button in ($normalButtons + $barButtons)) { $button.RightIsInputKey = $true }
 $stage.Controls.AddRange($barButtons)
 $tab = 0
@@ -961,7 +1066,7 @@ function Set-Theme([string]$name) {
     Set-ButtonKind $btnNext 'ink'
     Set-ButtonKind $btnBarRun 'primary'
     Set-ButtonKind $btnBarNext 'ink'
-    foreach ($button in @($btnUndo,$btnSet,$btnBar,$btnLight,$btnDark,$btnBarUndo,$btnBarBack)) { Set-ButtonKind $button 'quiet' }
+    foreach ($button in @($btnUndo,$btnSet,$btnLight,$btnDark,$btnBarUndo)) { Set-ButtonKind $button 'quiet' }
     $selected = if ($name -eq 'light') { $btnLight } else { $btnDark }
     $selected.SetColors($C.Hair, $C.Ink, $C.Hair, $C.Hair, $C.Hair)
     if ($form.IsHandleCreated) { [MtNative]::DarkTitle($form.Handle, ($name -eq 'dark')) }
@@ -977,7 +1082,7 @@ function Layout-Band {
     }
     $btnSet.Location = New-Object Drawing.Point(($band.ClientSize.Width - (S 16) - $btnSet.Width), (S 10))
     $right = $band.ClientSize.Width - (S 16)
-    foreach ($button in @($btnBar,$btnDark,$btnLight)) {
+    foreach ($button in @($btnDark,$btnLight)) {
         $right -= $button.Width
         $button.Location = New-Object Drawing.Point($right, (S 54))
         $right -= S 4
@@ -998,13 +1103,16 @@ $stage.add_Paint({ param($s, $e) Paint-Stage $e.Graphics })
 $stage.add_DoubleClick({ if ($script:BarMode) { Set-BarMode $false } })
 
 # ---------------- presenter bar ----------------
-# The same form becomes a borderless bar in place and stays above other windows.
+# The same form becomes a compact bar with native maximize and close buttons.
 $script:BarMode = $false
-$script:NormalBounds = $null
+$script:NormalSize = $form.Size
 $script:BarDrag = $null
 
 function Layout-BarControls {
     if (-not $script:BarMode) { return }
+    $frame = $form.Size - $form.ClientSize
+    $minHeight = if ($form.ClientSize.Width -lt (S $script:BarTwoRowWidth)) { S 88 } else { S 58 }
+    $form.MinimumSize = New-Object Drawing.Size(((S 300) + $frame.Width), ($minHeight + $frame.Height))
     $x = $stage.ClientSize.Width - (S 12)
     $y = if ($stage.ClientSize.Width -lt (S $script:BarTwoRowWidth)) { $stage.ClientSize.Height - (S 42) }
          else { [int](($stage.ClientSize.Height - (S 36)) / 2) }
@@ -1026,20 +1134,24 @@ function Set-BarMode([bool]$on) {
     $form.SuspendLayout()
     if ($on) {
         $bounds = $form.Bounds
-        $script:NormalBounds = $bounds
-        $height = if ($bounds.Width -lt (S $script:BarTwoRowWidth)) { S 88 } else { S 58 }
+        $script:NormalSize = $bounds.Size
         $form.MinimumSize = [Drawing.Size]::Empty
-        $form.FormBorderStyle = 'None'
+        $form.MinimizeBox = $false
+        $form.MaximizeBox = $true
+        $frame = $form.Size - $form.ClientSize
+        $height = if (($bounds.Width - $frame.Width) -lt (S $script:BarTwoRowWidth)) { S 88 } else { S 58 }
         $strip.Visible = $false
         $band.Visible = $false
-        $form.SetBounds($bounds.X, $bounds.Y, $bounds.Width, $height)
+        $form.SetBounds($bounds.X, $bounds.Y, $bounds.Width, ($height + $frame.Height))
         $form.TopMost = $true
     } else {
-        $form.FormBorderStyle = 'Sizable'
+        $location = $form.Location
+        $form.MaximizeBox = $false
+        $form.MinimizeBox = $true
         $strip.Visible = $true
         $band.Visible = $true
         $form.MinimumSize = $script:NormalMin
-        if ($script:NormalBounds) { $form.Bounds = $script:NormalBounds } else { Place-Corner }
+        $form.SetBounds($location.X, $location.Y, $script:NormalSize.Width, $script:NormalSize.Height)
         $form.TopMost = $script:TopMostPref
         if ($form.IsHandleCreated -and $script:ThemeName -eq 'dark') { [MtNative]::DarkTitle($form.Handle, $true) }
     }
@@ -1049,7 +1161,10 @@ function Set-BarMode([bool]$on) {
     Layout-BarControls
     $stage.Invalidate()
     Refresh-All
-    if ($on) { $btnBarRun.Select() } else { $btnBar.Select() }
+    if ($on -and $btnBarRun.Visible) { $btnBarRun.Select() }
+    elseif ($on) { $btnBarNext.Select() }
+    elseif ($btnRun.Visible) { $btnRun.Select() }
+    else { $btnNext.Select() }
 }
 
 $stage.add_MouseDown({
@@ -1083,6 +1198,7 @@ function Toggle-BarMode {
     Set-BarMode (-not $script:BarMode)
     try { Save-Config } catch { }
 }
+$form.add_SwitchViewRequested({ Toggle-BarMode })
 $band.add_Paint({ param($s, $e) Paint-Band $e.Graphics })
 $band.add_Resize({ Layout-Band })
 
@@ -1121,8 +1237,9 @@ $form.add_FormClosing({
 })
 
 # ---------------- start ----------------
-Start-Meeting $script:Cfg.Count
 Set-Theme $script:ThemeName
+Start-Meeting $script:Cfg.Count -WrapMinutes $script:Cfg.WrapMinutes
+Refresh-All
 Place-Corner
 # Reopen as the presenter bar if that is how the timer was closed last time.
 if ($script:Cfg.Bar) { Set-BarMode $true }

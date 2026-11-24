@@ -343,5 +343,54 @@ Step 15
 Check 'cancelled reset preserves elapsed' (Get-Elapsed 0) 15
 Check 'cancelled reset preserves running clock' $script:Sw.IsRunning $true
 
+# Wrap-up planning and the wall-clock countdown.
+New-Meeting 2
+Start-Meeting 2 $script:End -WrapMinutes 5
+Check 'wrap-up starts with a 14:55 speaking cutoff' (Get-Preview) 1650
+[void](Switch-RunState)
+Step 1500
+[void](Move-ToNextSpeaker)
+Check 'early finish redistributes only speaking time' (Get-Budget 1) 1800
+Step 1740
+Check 'one advance starts wrap-up' (Move-ToNextSpeaker) $true
+Check 'an early wrap-up uses the real meeting deadline' (Get-Phase).Text '06:00'
+Check 'wrap-up does not pause' (Switch-RunState) $false
+Step 390
+Check 'wrap-up tracks overtime beyond the deadline' (Get-Phase).Text '+00:30'
+[void](Move-ToNextSpeaker)
+Check 'finish prepares the next meeting with the original reserve' $script:WrapReserve 300
+Step 10
+[void](Restore-PreviousTurn)
+Check 'undo finish restores wrap-up against the original deadline' (Get-Phase).Text '+00:40'
+[void](Restore-PreviousTurn)
+Check 'undo wrap-up restores the running final speaker' $script:Sw.IsRunning $true
+Check 'undo wrap-up restores time to the final speaker' (Get-Elapsed 1) 2140
+Check 'wrap-up can start after the scheduled end' (Move-ToNextSpeaker) $true
+Check 'late entry immediately shows actual overtime' (Get-Phase).Text '+00:40'
+
+New-Meeting 2 '14:54:00'
+Start-Meeting 2 $script:End -WrapMinutes 5
+$options = Get-WrapOptions 0
+Check 'keeping five minutes budgets thirty seconds each' $options.KeepShare 30
+Check 'using wrap-up time allows one minute each' $options.UseShare 60
+Check 'using wrap-up time leaves four minutes' $options.Reserve 240
+Check 'cancelling the conflict leaves the speaker idle' (Switch-RunState -ChooseWrap { 'cancel' }) $false
+Check 'keeping the reserve uses the shorter budget' (Switch-RunState -ChooseWrap { 'keep' }) $true
+Check 'keep locks a thirty-second budget' (Get-Budget 0) 30
+Start-Meeting 2 $script:End -WrapMinutes 5
+[void](Switch-RunState -ChooseWrap { 'use' })
+Check 'use locks a one-minute budget' (Get-Budget 0) 60
+Check 'use changes the current reserve' $script:WrapReserve 240
+Step 180
+Check 'keep estimates only wrap-up time still available' (Get-WrapOptions 1).KeepReserve 180
+[void](Move-ToNextSpeaker -ChooseWrap { 'use' })
+[void](Restore-PreviousTurn)
+Check 'undo the next speaker restores the prior reserve' $script:WrapReserve 240
+
+New-Meeting 2 '14:54:00'
+Start-Meeting 2 $script:End -WrapMinutes 5
+Check 'a wrap choice left open past the deadline requires overtime consent' (Switch-RunState -ChooseWrap { Step 361; 'use' }) $false
+Check 'declining overtime preserves the reserve' $script:WrapReserve 300
+
 Write-Host ("{0} passed, {1} failed" -f $script:Passes, $script:Fails)
 exit $script:Fails

@@ -24,6 +24,8 @@ using System.Drawing;
 using System.Runtime.InteropServices;
 using System.Windows.Forms;
 public static class TimerTestInput {
+    [DllImport("user32.dll")]
+    public static extern IntPtr SendMessage(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     static extern IntPtr FindWindow(string cls, string title);
     [DllImport("user32.dll")]
@@ -230,11 +232,7 @@ try {
             $settings.TopMost -eq $case[3] -and $settings.Theme -ceq $case[4] -and
             $null -eq $settings.PSObject.Properties['BarEdge']) "Read preferences from $($case[0])"
     }
-    $barState = [pscustomobject]@{ Run = 'run'; Level = 'normal'; Closing = $false; Rem = 61 }
-    Assert ((Get-BarMessage $barState) -eq 'Running') 'The presenter bar stays quiet above the one-minute cue'
-    $barState.Closing = $true
-    $barState.Rem = 60
-    Assert ((Get-BarMessage $barState) -eq '1 min left') 'The presenter bar shows the one-minute cue'
+    Assert ((Get-RemainingMessage 60) -eq '1 min left') 'Exactly one minute left reads naturally'
     Assert ((Get-RemainingMessage 65) -eq '1 min 5 sec left') 'Mixed minutes and seconds are shown'
     Assert ((Get-RemainingMessage 0.2) -eq '1 sec left') 'Remaining seconds round up'
 
@@ -256,8 +254,7 @@ try {
     foreach ($button in ($normalButtons + $barButtons)) {
         Assert ($button -is [Windows.Forms.IButtonControl] -and $button.TabStop) 'Actions must use keyboard-accessible native buttons'
     }
-    Assert ($btnBar.Text -eq 'Presenter bar' -and $btnBarBack.Text -eq 'Main window') 'Mode controls need explicit labels'
-    Assert ($btnBar.Glyph -eq 'presenter-bar') 'Presenter entry is rendered as an icon'
+    Assert ($normalButtons.Text -notcontains 'Presenter bar' -and $barButtons.Text -notcontains 'Main window') 'Title bar controls switch between views'
     $initialBounds = $form.Bounds
     $initialTopMost = $script:TopMostPref
     $script:TopMostPref = $false
@@ -282,18 +279,47 @@ try {
     $btnNext.PerformClick()
     $btnUndo.PerformClick()
     Assert ($script:Idx -eq 1 -and $script:Sw.IsRunning) 'Undo after Finish restores the running speaker'
+    $beforeMinimize = $form.Bounds
+    [void][TimerTestInput]::SendMessage($form.Handle, 0x112, [IntPtr]0xF020, [IntPtr]::Zero)
+    Assert ($script:BarMode -and $form.TopMost -and $form.WindowState -eq 'Normal') 'The native minimize command opens the presenter bar'
+    Assert ($form.Location -eq $beforeMinimize.Location) 'Minimizing anchors the bar to the timer position'
+    Assert ($form.MaximizeBox -and $form.ControlBox -and $form.FormBorderStyle -eq 'Sizable') 'The presenter bar can be resized and offers maximize and close'
+    [void][TimerTestInput]::SendMessage($form.Handle, 0x112, [IntPtr]0xF030, [IntPtr]::Zero)
+    Assert (-not $script:BarMode -and $form.Bounds -eq $beforeMinimize -and $script:Idx -eq 1 -and $script:Sw.IsRunning) 'Back restores the same running turn and window bounds after minimize'
+    Start-Meeting 1 ((Get-Date).AddMinutes(10)) -WrapMinutes 5
+    Refresh-All
+    $btnRun.PerformClick()
+    Assert ($btnNext.Text -eq 'Wrap-up' -and $btnNext.Visible) 'The final speaker can start wrap-up from the main window'
+    $btnNext.PerformClick()
+    Assert ($form.Text.Contains('Wrap-up') -and $btnNext.Text -eq 'Finish' -and -not $btnRun.Visible) 'The main window shows wrap-up with a Finish button'
+    $btnUndo.PerformClick()
+    Assert ($script:Sw.IsRunning -and $btnNext.Text -eq 'Wrap-up') 'Undo returns the main window to the final speaker'
+    Set-BarMode $true
+    Assert ($btnBarNext.Glyph -eq 'wrap' -and $btnBarNext.Enabled) 'The presenter bar offers a dedicated wrap-up action'
+    $btnBarNext.PerformClick()
+    Assert ($btnBarNext.Glyph -eq 'stop' -and $btnBarNext.Enabled -and -not $btnBarRun.Visible) 'The presenter bar offers Finish during wrap-up'
+    [TimerTestInput]::Paint($stage)
+    $btnBarNext.PerformClick()
+    $btnBarUndo.PerformClick()
+    Assert ((Get-Phase).Run -eq 'wrap') 'Undo Finish returns the bar to wrap-up'
+    $btnBarUndo.PerformClick()
+    Assert ($script:Sw.IsRunning -and $btnBarNext.Glyph -eq 'wrap') 'A second Undo restores the running speaker'
+    Set-BarMode $false
+    Fresh 2
+    $btnRun.PerformClick()
+    $btnNext.PerformClick()
     $script:DialogCase = 'Restart'
     $btnSet.PerformClick()
     Assert ($script:Idx -eq 0 -and -not $script:Sw.IsRunning) 'Confirmed restart returns to speaker one'
     Fresh
     $normalBounds = $form.Bounds
-    [TimerTestInput]::Click($btnBar)
-    Assert $script:BarMode 'Bar button enters presenter mode'
+    [void][TimerTestInput]::SendMessage($form.Handle, 0x112, [IntPtr]0xF020, [IntPtr]::Zero)
+    Assert $script:BarMode 'Minimize enters presenter mode'
     Assert ($stage.BackColor -eq $C.Strip) 'Presenter button corners match the bar'
     Assert ($form.Location -eq $normalBounds.Location -and $form.Width -eq $normalBounds.Width) 'Bar entry keeps the normal location and minimum width at a screen edge'
     Assert ($form.Height -lt $normalBounds.Height -and $form.Width -gt $form.Height) 'Bar entry reduces the height and remains horizontal'
     Assert ($form.TopMost -and -not (Load-Config).TopMost) 'Presenter mode stays on top without saving it as the normal preference'
-    Assert ($form.Height -eq (S 88)) 'A narrow horizontal bar reserves a second row'
+    Assert ($form.ClientSize.Height -eq (S 88)) 'A narrow horizontal bar reserves a second row'
     foreach ($button in $barButtons) {
         Assert ($button.Top -ge (S 42) -and $stage.ClientRectangle.Contains($button.Bounds)) 'Minimum-width bar buttons stay below the clock and within the window'
         Assert (-not [string]::IsNullOrEmpty($button.Glyph)) 'Presenter actions have icons and retain native text for accessibility'
@@ -338,9 +364,10 @@ try {
     Assert ($script:Idx -eq 1) 'Presenter next button switches speakers'
     [TimerTestInput]::Click($btnBarUndo)
     Assert ($script:Idx -eq 0) 'Presenter undo button restores the speaker'
-    [TimerTestInput]::Click($btnBarBack)
-    Assert (-not $script:BarMode -and $form.Bounds -eq $normalBounds) 'Back button restores the normal window bounds'
-    Assert (-not $form.TopMost) 'Back button restores the disabled always-on-top preference'
+    $barLocation = $form.Location
+    [void][TimerTestInput]::SendMessage($form.Handle, 0x112, [IntPtr]0xF030, [IntPtr]::Zero)
+    Assert (-not $script:BarMode -and $form.Size -eq $normalBounds.Size -and $form.Location -eq $barLocation) 'Maximize restores the timer size at the moved bar'
+    Assert (-not $form.TopMost) 'Maximize restores the always-on-top preference'
     $script:TopMostPref = $initialTopMost
     $form.TopMost = $initialTopMost
     $form.Bounds = $initialBounds
@@ -462,12 +489,15 @@ try {
         $wideBounds = $form.Bounds
         Set-BarMode $true
         Assert ($form.Location -eq $wideBounds.Location -and $form.Width -eq $wideBounds.Width) 'Wide bar starts at the normal location and retains its width'
-        Assert ($form.Height -eq (S 58)) 'Wide bar fits on one row'
+        Assert ($form.ClientSize.Height -eq (S 58)) 'Wide bar fits on one row'
         foreach ($button in $barButtons) {
             Assert ($stage.ClientRectangle.Contains($button.Bounds)) 'Presenter controls fit the wide layout'
         }
         [TimerTestInput]::Paint($stage)
         if ($RenderDirectory) { Save-MainRender ($theme + '-bar-wide') }
+        $form.ClientSize = New-Object Drawing.Size((S 840), (S 190))
+        [TimerTestInput]::Paint($stage)
+        Assert ($stage.ClientSize -eq $form.ClientSize -and $stage.ClientRectangle.Contains($btnBarNext.Bounds)) 'The enlarged presenter stage keeps the controls on screen'
         Set-BarMode $false
         $form.Bounds = $compactBounds
         Fresh
@@ -515,18 +545,22 @@ try {
     $form.ClientSize = New-Object Drawing.Size((Get-MinClientWidth), (S 290))
     Layout-Band
     Assert ($btnUndo.Right -lt $btnSet.Left) 'Main actions fit minimum width'
-    Assert ($btnLight.Right -lt $btnDark.Left -and $btnDark.Right -lt $btnBar.Left -and $btnBar.Right -le $band.ClientSize.Width) 'Theme and presenter icons fit in order at minimum width'
-    Assert ($btnLight.Top -eq $btnBar.Top -and $btnDark.Top -eq $btnBar.Top) 'Presenter icon shares the theme row'
+    Assert ($btnLight.Right -lt $btnDark.Left -and $btnDark.Right -le $band.ClientSize.Width) 'Theme buttons fit at minimum width'
     # Physical pixels available to the normal clock in a 380 x 328 client at 200% DPI.
     $clockWidth = 760
     $clockHeight = 240
     $normalFont = Font-Px $famNum ($clockHeight * 0.82) $numStyle
     Assert ((Get-StageClockFont '04:32' $clockWidth $clockHeight) -eq $normalFont) 'A typical countdown retains the normal font size'
+    $largeFont = Get-StageClockFont '04:32' (2 * $clockWidth) (2 * $clockHeight)
+    Assert ([math]::Abs($largeFont.Size - 2 * $normalFont.Size) -le 1) 'Doubling the clock area doubles the digit size'
     foreach ($text in @('1439:59', '+1000:01')) {
         $font = Get-StageClockFont $text $clockWidth $clockHeight
         Assert ((Measure-W $text $font) -le $clockWidth) "The full $text clock fits the normal window at 200% DPI"
     }
     if ($RenderDirectory) { Save-MainRender 'minimum' }
+    Set-BarMode $true
+    [void][TimerTestInput]::SendMessage($form.Handle, 0x112, [IntPtr]0xF060, [IntPtr]::Zero)
+    Assert ($form.IsDisposed -and -not $timer.Enabled) 'Closing the presenter bar exits the timer'
     Write-Host ("{0} native UI checks passed" -f $script:Checks)
 } finally {
     $timer.Stop()
