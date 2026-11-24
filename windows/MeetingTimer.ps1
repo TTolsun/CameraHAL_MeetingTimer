@@ -289,14 +289,8 @@ function Save-Config {
 $script:Cfg = Load-Config
 $script:ThemeName = $script:Cfg.Theme
 $C = $Themes[$script:ThemeName]
-$script:End = Get-NextHour
 $script:Sw = New-Object System.Diagnostics.Stopwatch
 $script:People = @()
-$script:Idx = 0
-# Minimum share per speaker (seconds) and the first plan, fixed when the first speaker starts (0 = not set).
-$script:MinShare = 60
-$script:Plan = 0.0
-
 # ---------------- drawing helpers ----------------
 function Draw-Text($g, [string]$text, $font, $color, [int]$x, [int]$y, [int]$w, [int]$h, [string]$align = 'Left') {
     $f = [Windows.Forms.TextFormatFlags]'VerticalCenter, SingleLine, EndEllipsis, NoPadding'
@@ -437,8 +431,7 @@ $script:BarTwoRowWidth = 520
 
 # Current speaker's share minus the first plan, in whole seconds, with its color on the dark strip.
 function Get-PlanDelta {
-    $st = Get-Phase
-    $d = if ($script:Plan -gt 0) { [math]::Round($st.Budget - $script:Plan) } else { 0 }
+    $d = Get-PlanDifference
     if ($d -gt 0)     { [pscustomobject]@{ Text = '+' + (Fmt $d); Color = $C.Plus } }
     elseif ($d -lt 0) { [pscustomobject]@{ Text = '-' + (Fmt $d); Color = $C.Warn } }
     else              { [pscustomobject]@{ Text = '±00:00'; Color = $C.Zero } }
@@ -719,114 +712,27 @@ function Confirm-Action([string]$message, [string]$title) {
     [Windows.Forms.MessageBox]::Show($owner, $message, $title, 'YesNo', 'Warning', 'Button2') -eq 'Yes'
 }
 
-function Confirm-SpeakerStart([int]$i) {
-    if (-not $script:People[$i].Started -and (Get-MeetingLeft) -le 0) {
-        return (Confirm-Action "The meeting end time has passed.
-Continue and track overtime?" 'End time reached')
-    }
-    $true
-}
-
-function Commit-Current {
-    $script:People[$script:Idx].Used += $script:Sw.Elapsed.TotalSeconds
-    $script:Sw.Reset()
-}
-
-function Switch-To([int]$i) {
-    if ($i -lt 0 -or $i -ge $script:People.Count -or $i -eq $script:Idx) { return }
-    $wasRunning = $script:Sw.IsRunning
-    Commit-Current
-    $script:Idx = $i
-    if ($wasRunning) { Lock-Budget; $script:Sw.Start() }
-    Refresh-All
+function Confirm-Overtime {
+    Confirm-Action "The meeting end time has passed.
+Continue and track overtime?" 'End time reached'
 }
 
 function Toggle-Run {
-    if ($script:Sw.IsRunning) { $script:Sw.Stop() }
-    else {
-        if (-not (Confirm-SpeakerStart $script:Idx)) { return }
-        Lock-Budget
-        $script:Sw.Start()
-    }
-    Refresh-All
+    if (Switch-RunState -ConfirmOvertime ${function:Confirm-Overtime}) { Refresh-All }
 }
 
 function Go-Next {
-    # Same rule as the button (also covers N and the right arrow): the clock must be running.
-    if (-not $script:Sw.IsRunning) { return }
-    $isLast = $script:Idx -ge $script:People.Count - 1
-    if (-not $isLast -and -not (Confirm-SpeakerStart ($script:Idx + 1))) { return }
-    Save-Undo $(if ($isLast) { 'finish' } else { 'next' })
-    if ($isLast) {
-        # Finishing ends the meeting: no summary, go straight to a fresh one.
-        Commit-Current
-        Start-Over
-    } else {
-        Switch-To ($script:Idx + 1)
-    }
+    if (Move-ToNextSpeaker -ConfirmOvertime ${function:Confirm-Overtime}) { Refresh-All }
 }
 
-# Clears the current speaker's clock and share (e.g. after an accidental start).
 function Reset-Current {
-    $wasRunning = $script:Sw.IsRunning
-    # Nothing to clear: keep any earlier undo instead of overwriting it with a no-op.
-    if (-not $wasRunning -and (Get-Elapsed $script:Idx) -eq 0 -and $script:People[$script:Idx].Budget -eq 0) { return }
-    if (-not (Confirm-Action 'Reset elapsed and allocated time for this speaker?' 'Reset this speaker')) { return }
-    Save-Undo 'reset'
-    $script:Sw.Reset()
-    $script:People[$script:Idx] = New-Person
-    if ($wasRunning -and (Get-MeetingLeft) -gt 0) { Lock-Budget; $script:Sw.Start() }
-    Refresh-All
-}
-
-function Start-Over([datetime]$endTime = (Get-NextHour)) {
-    $script:Sw.Reset()
-    $script:People = @(1..$script:Cfg.Count | ForEach-Object { New-Person })
-    $script:Idx = 0
-    $script:End = $endTime
-    $script:Plan = 0.0
-    Refresh-All
-}
-
-# ---------------- undo ----------------
-# One level of undo for the keys that cannot be taken back otherwise: Next (including the
-# finish that starts a fresh meeting) and Reset. The time that passed since then belongs to
-# the speaker who was talking, so it is given back to them if their clock was running.
-$script:Undo = $null
-function Save-Undo([string]$kind) {
-    $copy = @($script:People | ForEach-Object { $_.PSObject.Copy() })
-    # Fold the running stopwatch into the copy, the same way Commit-Current would.
-    $copy[$script:Idx].Used = Get-Elapsed $script:Idx
-    $script:Undo = [pscustomobject]@{
-        Kind = $kind; People = $copy; Idx = $script:Idx; End = $script:End
-        Plan = $script:Plan; Running = $script:Sw.IsRunning; At = Get-Date
-    }
-}
-
-# Recover the last destructive action, including a reset on the first speaker.
-function Test-UndoAllowed {
-    $null -ne $script:Undo
+    if (Clear-CurrentSpeaker -ConfirmReset {
+        Confirm-Action 'Reset elapsed and allocated time for this speaker?' 'Reset this speaker'
+    }) { Refresh-All }
 }
 
 function Undo-Last {
-    $u = $script:Undo
-    if (-not (Test-UndoAllowed)) { return }
-    $script:Undo = $null
-    $script:Sw.Reset()
-    $script:People = $u.People
-    $script:Idx = $u.Idx
-    $script:End = $u.End
-    $script:Plan = $u.Plan
-    if ($u.Running) {
-        $script:People[$script:Idx].Used += [math]::Max(0, ((Get-Date) - $u.At).TotalSeconds)
-        $script:Sw.Start()
-    }
-    Refresh-All
-}
-
-# True for a few seconds after an undoable action, so the coaching line can offer Ctrl+Z.
-function Test-UndoHint {
-    (Test-UndoAllowed) -and ((Get-Date) - $script:Undo.At).TotalSeconds -lt 10
+    if (Restore-PreviousTurn) { Refresh-All }
 }
 
 function Place-Corner {
@@ -842,31 +748,6 @@ function New-DlgLabel([string]$text, $font, $color, [int]$x, [int]$y, [int]$w, [
     $l.ForeColor = $color
     $l.SetBounds((S $x), (S $y), (S $w), (S $h))
     $l
-}
-
-# Resolves the HH:mm picked in the settings dialog to the next time it occurs (today, or tomorrow if past).
-function Resolve-EndTime([datetime]$picked, [datetime]$original) {
-    if ($picked.Hour -eq $original.Hour -and $picked.Minute -eq $original.Minute) { return $original }
-    $now = Get-Date
-    $end = $now.Date.AddHours($picked.Hour).AddMinutes($picked.Minute)
-    if ($end -le $now) { $end = $end.AddDays(1) }
-    $end
-}
-
-# Validate a fresh meeting against all speakers, including anyone who spoke in the old one.
-function Get-ScheduleIssue([long]$count, [datetime]$end) {
-    if ($count -gt 50) { return 'A meeting supports up to 50 speakers.' }
-    $remaining = ($end - (Get-Date)).TotalSeconds
-    $seconds = [math]::Max(0, [math]::Floor($remaining))
-    $capacity = [int][math]::Floor($seconds / $script:MinShare)
-    if ($count -le $capacity) { return }
-    $need = [int][math]::Ceiling($count * $script:MinShare / 60)
-    $reason = if ($remaining -le 0) { 'The selected end time has passed.' } else {
-        'Time left: {0} min {1} sec.' -f [math]::Floor($seconds / 60), ($seconds % 60)
-    }
-    $next = if ($capacity -ge 1) { "Use at most ${capacity} speakers or choose a later end time." }
-            else { 'Choose a later end time.' }
-    "$reason`nSpeaker count: ${count}. Allow at least ${need} min (1 min each).`n`n$next"
 }
 
 function Show-ScheduleNotice([string]$reason) {
@@ -1023,9 +904,7 @@ function Show-Settings {
         $form.TopMost = $script:TopMostPref -or $script:BarMode
         $count = [int]$num.Value
         if ($script:SetStartOver -or $count -ne $script:People.Count -or $script:SetProposedEnd -ne $script:End) {
-            $script:Cfg.Count = $count
-            $script:Undo = $null
-            Start-Over $script:SetProposedEnd
+            Start-Meeting $count $script:SetProposedEnd
         }
         try { Save-Config } catch { }
         Refresh-All
@@ -1242,8 +1121,8 @@ $form.add_FormClosing({
 })
 
 # ---------------- start ----------------
+Start-Meeting $script:Cfg.Count
 Set-Theme $script:ThemeName
-Start-Over
 Place-Corner
 # Reopen as the presenter bar if that is how the timer was closed last time.
 if ($script:Cfg.Bar) { Set-BarMode $true }
