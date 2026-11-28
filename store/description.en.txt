@@ -1,6 +1,6 @@
 The last person on the agenda usually gets whatever time is left. In a design review, that might be the person who spotted the problem everyone came to solve.
 
-time-per-turn is a meeting timer that starts with a question: when do we need to leave? Set an end time, enter the number of speakers, and reserve a few minutes for decisions. The timer divides the speaking time among the people in the room.
+Time per Turn is a meeting timer that starts with a question: when do we need to leave? Set an end time, enter the number of speakers, and reserve a few minutes for decisions. The timer divides the speaking time among the people in the room.
 
 Say your review runs from 2:30 to 3:00. Five people have work to share. You keep five minutes for the wrap-up, so the first speaker gets five minutes. She finishes in three. Press Next. Each of the four remaining speakers now gets five minutes and thirty seconds if the rest keep to time. If a turn runs long, the remaining shares adjust the same way.
 

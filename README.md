@@ -12,7 +12,7 @@
 
 1. [Chrome용 ZIP 다운로드](https://github.com/TTolsun/time-per-turn/releases/latest/download/time-per-turn-Chrome.zip)를 누르세요. 압축은 그대로 두세요.
 2. 데스크톱 Chrome 116 이상에서 주소창에 `chrome://extensions`를 입력하고 오른쪽 위의 **개발자 모드**를 켜세요.
-3. 다운로드 폴더에서 `time-per-turn-Chrome.zip`을 확장 프로그램 페이지로 끌어다 놓으세요. 설치되면 도구 모음의 **확장 프로그램**(퍼즐 아이콘)에서 **time-per-turn**을 눌러 실행하세요. 옆의 핀을 누르면 다음부터 도구 모음에서 바로 열 수 있습니다.
+3. 다운로드 폴더에서 `time-per-turn-Chrome.zip`을 확장 프로그램 페이지로 끌어다 놓으세요. 설치되면 도구 모음의 **확장 프로그램**(퍼즐 아이콘)에서 **Time per Turn**을 눌러 실행하세요. 옆의 핀을 누르면 다음부터 도구 모음에서 바로 열 수 있습니다.
 
 끌어다 놓아도 설치되지 않으면 ZIP을 보관할 폴더에 풀고 **압축해제된 확장 프로그램을 로드합니다**를 눌러 `manifest.json`이 들어 있는 폴더를 선택하세요. 회사 정책으로 개발자 모드가 잠겨 있다면 사내 Chrome 관리자에게 설치를 요청하세요.
 

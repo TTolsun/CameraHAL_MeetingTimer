@@ -45,7 +45,7 @@ try {
     $entries = @(Get-ChildItem -LiteralPath $windows -Name | Sort-Object)
     if (Compare-Object $entries @('time-per-turn.bat','time-per-turn.ps1','TimeModel.ps1')) { throw 'Unexpected Windows package contents.' }
     $manifest = Get-Content -LiteralPath (Join-Path $extension 'manifest.json') -Raw -Encoding UTF8 | ConvertFrom-Json
-    if ($manifest.name -ne 'time-per-turn') { throw 'Unexpected extension display name.' }
+    if ($manifest.name -cne 'Time per Turn') { throw 'Unexpected extension display name.' }
     Test-BatLaunch
     Write-Host 'Extracted BAT launched, closed and saved its settings.'
     $env:TIMER_EXTENSION_DIR = $extension
