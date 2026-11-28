@@ -21,9 +21,9 @@ function Write-Package([string]$name, [string]$root, [string[]]$files) {
 }
 
 $repo = Split-Path -Parent $PSScriptRoot
-Write-Package 'MeetingTimer-Windows.zip' (Join-Path $repo 'windows') @('MeetingTimer.bat', 'MeetingTimer.ps1', 'TimeModel.ps1')
+Write-Package 'time-per-turn-Windows.zip' (Join-Path $repo 'windows') @('time-per-turn.bat', 'time-per-turn.ps1', 'TimeModel.ps1')
 $extensionRoot = Join-Path $repo 'chrome-extension'
 $files = @(Get-ChildItem -LiteralPath $extensionRoot -File -Recurse | ForEach-Object {
     $_.FullName.Substring($extensionRoot.Length + 1).Replace('\', '/')
 })
-Write-Package 'MeetingTimer-Chrome.zip' $extensionRoot $files
+Write-Package 'time-per-turn-Chrome.zip' $extensionRoot $files

@@ -1,4 +1,4 @@
-﻿# MeetingTimer.ps1 - Compact weekly meeting speaker timer (Windows PowerShell 5.1 + WinForms)
+﻿# time-per-turn.ps1 - Compact weekly meeting speaker timer (Windows PowerShell 5.1 + WinForms)
 #
 # - Meeting end defaults to the next full hour after launch (14:05 -> 15:00).
 # - Enter only the number of speakers; the remaining meeting time is split
@@ -8,7 +8,7 @@
 #
 # Visual style follows the HP-inspired DESIGN.md (getdesign.md/hp): white canvas,
 # #1a1a1a ink, a single #024ad8 accent, 4px buttons, 1px hairlines.
-# Launch with MeetingTimer.bat (WinForms needs a single-threaded apartment, hence -STA).
+# Launch with time-per-turn.bat (WinForms needs a single-threaded apartment, hence -STA).
 
 param([string]$ConfigPath = (Join-Path $PSScriptRoot 'config.json'))
 
@@ -406,7 +406,7 @@ function Get-MinClientWidth {
 
 # ---------------- window ----------------
 $form = New-Object MtTimerForm
-$form.Text = 'Time per Turn'
+$form.Text = 'time-per-turn'
 $form.ClientSize = New-Object Drawing.Size((S 380), (S 328))
 $form.MinimumSize = New-Object Drawing.Size(((Get-MinClientWidth) + ($form.Width - $form.ClientSize.Width)), (S 328))
 $form.MaximizeBox = $false
@@ -756,7 +756,7 @@ function Refresh-All {
     $speaker = $script:Idx + 1
     if ($script:BarMode) { $speaker = '{0}/{1}' -f $speaker, $script:People.Count }
     $head = if ($wrapping) { 'Wrap-up' } else { "Speaker $speaker" }
-    $form.Text = '{0} · {1} · Time per Turn' -f $st.Text, $head
+    $form.Text = '{0} · {1} · time-per-turn' -f $st.Text, $head
     $strip.Invalidate()
     $stage.Invalidate()
 }

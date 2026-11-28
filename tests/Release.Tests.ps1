@@ -2,16 +2,16 @@
 param([string]$PackageDirectory = (Join-Path $PSScriptRoot '..\dist'))
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.IO.Compression.FileSystem
-$testRoot = Join-Path ([IO.Path]::GetTempPath()) ('Time per Turn ' + [guid]::NewGuid().ToString('N'))
+$testRoot = Join-Path ([IO.Path]::GetTempPath()) ('time-per-turn ' + [guid]::NewGuid().ToString('N'))
 $windows = Join-Path $testRoot 'Windows'
 $extension = Join-Path $testRoot 'Chrome'
 $oldExtension = $env:TIMER_EXTENSION_DIR
 
 function Test-BatLaunch {
-    $scriptPath = Join-Path $windows 'MeetingTimer.ps1'
+    $scriptPath = Join-Path $windows 'time-per-turn.ps1'
     $process = $null
     try {
-        $cmd = Start-Process -FilePath $env:ComSpec -ArgumentList '/d /c MeetingTimer.bat' -WorkingDirectory $windows -WindowStyle Hidden -PassThru
+        $cmd = Start-Process -FilePath $env:ComSpec -ArgumentList '/d /c time-per-turn.bat' -WorkingDirectory $windows -WindowStyle Hidden -PassThru
         if (-not $cmd.WaitForExit(8000)) { throw 'BAT launcher timed out.' }
         if ($cmd.ExitCode) { throw "BAT failed: $($cmd.ExitCode)" }
         $deadline = [datetime]::UtcNow.AddSeconds(25)
@@ -23,7 +23,7 @@ function Test-BatLaunch {
                 if ($child) { $process = Get-Process -Id $child.ProcessId }
             }
             if ($process) { $process.Refresh() }
-            if ($process -and $process.MainWindowTitle.EndsWith(' · Speaker 1 · Time per Turn')) { break }
+            if ($process -and $process.MainWindowTitle.EndsWith(' · Speaker 1 · time-per-turn')) { break }
             if ([datetime]::UtcNow -ge $deadline) { throw 'Packaged BAT did not show the timer window.' }
             Start-Sleep -Milliseconds 120
         } while ($true)
@@ -39,13 +39,13 @@ try {
     if (-not $env:CHROME_FOR_TESTING) { throw 'Set CHROME_FOR_TESTING to the Chrome for Testing executable.' }
     [void][IO.Directory]::CreateDirectory($testRoot)
     foreach ($name in @('Windows','Chrome')) {
-        $zip = Join-Path $PackageDirectory ("MeetingTimer-{0}.zip" -f $name)
+        $zip = Join-Path $PackageDirectory ("time-per-turn-{0}.zip" -f $name)
         [IO.Compression.ZipFile]::ExtractToDirectory($zip, (Join-Path $testRoot $name))
     }
     $entries = @(Get-ChildItem -LiteralPath $windows -Name | Sort-Object)
-    if (($entries -join ',') -ne 'MeetingTimer.bat,MeetingTimer.ps1,TimeModel.ps1') { throw 'Unexpected Windows package contents.' }
+    if (Compare-Object $entries @('time-per-turn.bat','time-per-turn.ps1','TimeModel.ps1')) { throw 'Unexpected Windows package contents.' }
     $manifest = Get-Content -LiteralPath (Join-Path $extension 'manifest.json') -Raw -Encoding UTF8 | ConvertFrom-Json
-    if ($manifest.name -ne 'Time per Turn') { throw 'Unexpected extension display name.' }
+    if ($manifest.name -ne 'time-per-turn') { throw 'Unexpected extension display name.' }
     Test-BatLaunch
     Write-Host 'Extracted BAT launched, closed and saved its settings.'
     $env:TIMER_EXTENSION_DIR = $extension

@@ -4,7 +4,7 @@ $ErrorActionPreference = 'Stop'
 if ($RenderDirectory) { [void][IO.Directory]::CreateDirectory($RenderDirectory) }
 $repo = Split-Path -Parent $PSScriptRoot
 $windows = Join-Path $repo 'windows'
-$source = [IO.File]::ReadAllText((Join-Path $windows 'MeetingTimer.ps1'))
+$source = [IO.File]::ReadAllText((Join-Path $windows 'time-per-turn.ps1'))
 $bootstrap = $source.Substring(0, $source.IndexOf('# ---------------- start ----------------'))
 $bootstrap = $bootstrap.Replace('$dlg.ShowDialog($form)', '(Invoke-TestDialog $dlg)')
 # Feed screen coordinates to the real handlers without moving the desktop cursor.
@@ -399,7 +399,7 @@ try {
         Assert ([TimerTestInput]::SendKey($runButton, [Windows.Forms.Keys]::Right)) 'Right is consumed during a run'
         Assert ($script:Idx -eq 1 -and ($form.ActiveControl -eq $runButton)) 'Right advances while keeping button focus'
         if (-not $usePresenterBar) {
-            Assert ($form.Text -match '^\+?\d{2,}:[0-5]\d · Speaker 2 · Time per Turn$') 'Normal title and taskbar label identify only the current speaker'
+            Assert ($form.Text -match '^\+?\d{2,}:[0-5]\d · Speaker 2 · time-per-turn$') 'Normal title and taskbar label identify only the current speaker'
             if ($RenderDirectory) { Save-MainRender 'main-speaker-2' }
         }
         Toggle-Run

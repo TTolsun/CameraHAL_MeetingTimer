@@ -237,7 +237,7 @@ function render() {
   el('next').classList.toggle('start-wrap', nextLabel === 'Start wrap-up');
   el('next').hidden = !running && !wrapping;
   el('undo').disabled = !previous;
-  document.title = clock + ' · ' + speaker + ' · Time per Turn';
+  document.title = clock + ' · ' + speaker + ' · time-per-turn';
   if (miniUI) {
     miniUI.count.textContent = wrapping ? 'Wrap-up' : (state.index + 1) + ' / ' + state.count;
     miniUI.clock.textContent = clock;

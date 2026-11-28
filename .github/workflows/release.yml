@@ -43,10 +43,10 @@ jobs:
         run: .\tests\Release.Tests.ps1
       - uses: actions/upload-artifact@v4
         with:
-          name: meeting-timer-packages
+          name: time-per-turn-packages
           path: |
-            dist/MeetingTimer-Windows.zip
-            dist/MeetingTimer-Chrome.zip
+            dist/time-per-turn-Windows.zip
+            dist/time-per-turn-Chrome.zip
           if-no-files-found: error
   draft:
     if: github.event_name == 'push'
@@ -57,9 +57,9 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: meeting-timer-packages
+          name: time-per-turn-packages
       - name: Attach both packages to the draft release
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create $env:GITHUB_REF_NAME .\MeetingTimer-Windows.zip .\MeetingTimer-Chrome.zip --repo $env:GITHUB_REPOSITORY --draft --verify-tag --generate-notes
+        run: gh release create $env:GITHUB_REF_NAME .\time-per-turn-Windows.zip .\time-per-turn-Chrome.zip --repo $env:GITHUB_REPOSITORY --draft --verify-tag --generate-notes

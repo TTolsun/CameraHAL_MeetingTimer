@@ -12,7 +12,7 @@ The user-facing README is in Korean. Code comments and commit messages are in En
 |---|---|---|
 | Change allocation | [TimeModel.ps1](windows/TimeModel.ps1) (`Calc-Share`, `Lock-Budget`) | [time-model.js](chrome-extension/time-model.js) (`allocation`, `startSpeaker`) |
 | Find regression tests | [TimeModel.Tests.ps1](tests/TimeModel.Tests.ps1) and [Ui.Tests.ps1](tests/Ui.Tests.ps1) | [chrome-model.test.mjs](tests/chrome-model.test.mjs) and [chrome-ui.test.mjs](tests/chrome-ui.test.mjs) |
-| Edit the presenter bar | [MeetingTimer.ps1](windows/MeetingTimer.ps1) (`Set-BarMode`, `Paint-Bar`) | [timer.js](chrome-extension/timer.js) (`openBar`, `render`) and [timer.css](chrome-extension/timer.css) |
+| Edit the presenter bar | [time-per-turn.ps1](windows/time-per-turn.ps1) (`Set-BarMode`, `Paint-Bar`) | [timer.js](chrome-extension/timer.js) (`openBar`, `render`) and [timer.css](chrome-extension/timer.css) |
 
 ## Commands
 
@@ -42,20 +42,20 @@ The runtime sources require no compilation.
   ```
   The popup assertions freeze the wall clock while driving the normal controls. The presenter bar checks use a live browser window.
 
-- Double-click `windows/MeetingTimer.bat` or run it from a shell.
+- Double-click `windows/time-per-turn.bat` or run it from a shell.
   ```
-  powershell.exe -NoProfile -STA -ExecutionPolicy RemoteSigned -File .\windows\MeetingTimer.ps1
+  powershell.exe -NoProfile -STA -ExecutionPolicy RemoteSigned -File .\windows\time-per-turn.ps1
   ```
   `-STA` is required: WinForms needs a single-threaded apartment.
 - Parse the WinForms entry point without launching it.
   ```
-  $e=$null; [void][System.Management.Automation.Language.Parser]::ParseFile("$PWD\windows\MeetingTimer.ps1",[ref]$null,[ref]$e); $e
+  $e=$null; [void][System.Management.Automation.Language.Parser]::ParseFile("$PWD\windows\time-per-turn.ps1",[ref]$null,[ref]$e); $e
   ```
 - Run `scripts/Build-Release.ps1` to package the Windows launcher, UI and model together and the unpacked `chrome-extension/` separately. A version tag prepares a draft release with both tested ZIPs.
 
 ## Windows architecture
 
-`MeetingTimer.ps1` initializes WinForms, loads `TimeModel.ps1`, and opens the form with `$form.ShowDialog()`. Button and shortcut handlers pass modal confirmation callbacks into the model and refresh the form after a transition succeeds.
+`time-per-turn.ps1` initializes WinForms, loads `TimeModel.ps1`, and opens the form with `$form.ShowDialog()`. Button and shortcut handlers pass modal confirmation callbacks into the model and refresh the form after a transition succeeds.
 
 1. **Inline C# (`Add-Type`)**: `MtNative` (`SetProcessDPIAware`, `DwmSetWindowAttribute` for the dark title bar, rounded-rect path), `MtCanvas` (double-buffered panel), `MtButton` (custom-painted native Button with keyboard focus, accessibility and dialog-button support). The main form intercepts Space to toggle the timer regardless of the focused button. Guarded by `if (-not ('MtButton' -as [type]))` because a type cannot be re-added in the same session.
 2. **DPI scaling**: every pixel size goes through `S <px>`; fonts through `FK`/`FKM` (Korean) and `FN` (numerals). New layout code must use these, not raw pixels.

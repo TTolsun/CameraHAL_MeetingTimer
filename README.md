@@ -1,18 +1,18 @@
-# Time per Turn
+# time-per-turn
 
-종료 시각까지 남은 시간을 발표자에게 나눠 주는 타이머입니다. Windows용과 Chrome용 중 하나를 선택해 사용하세요. [GitHub 릴리스](https://github.com/TTolsun/CameraHAL_MeetingTimer/releases)
+종료 시각까지 남은 시간을 발표자에게 나눠 주는 타이머입니다. Windows용과 Chrome용 중 하나를 선택해 사용하세요. [GitHub 릴리스](https://github.com/TTolsun/time-per-turn/releases)
 
 ## 실행 방법
 
 ### Windows에서 실행
 
-[Windows용 ZIP](https://github.com/TTolsun/CameraHAL_MeetingTimer/releases/latest/download/MeetingTimer-Windows.zip)을 폴더에 풀고 `MeetingTimer.bat`을 더블클릭하세요. 압축을 푼 파일은 같은 폴더에 두세요. Windows PowerShell 5.1로 실행되며 설정은 같은 폴더의 `config.json`에 저장됩니다.
+[Windows용 ZIP](https://github.com/TTolsun/time-per-turn/releases/latest/download/time-per-turn-Windows.zip)을 폴더에 풀고 `time-per-turn.bat`을 더블클릭하세요. 압축을 푼 파일은 같은 폴더에 두세요. Windows PowerShell 5.1로 실행되며 설정은 같은 폴더의 `config.json`에 저장됩니다.
 
 ### Chrome 확장 프로그램 설치
 
-1. [Chrome용 ZIP 다운로드](https://github.com/TTolsun/CameraHAL_MeetingTimer/releases/latest/download/MeetingTimer-Chrome.zip)를 누르세요. 압축은 그대로 두세요.
+1. [Chrome용 ZIP 다운로드](https://github.com/TTolsun/time-per-turn/releases/latest/download/time-per-turn-Chrome.zip)를 누르세요. 압축은 그대로 두세요.
 2. 데스크톱 Chrome 116 이상에서 주소창에 `chrome://extensions`를 입력하고 오른쪽 위의 **개발자 모드**를 켜세요.
-3. 다운로드 폴더에서 `MeetingTimer-Chrome.zip`을 확장 프로그램 페이지로 끌어다 놓으세요. 설치되면 도구 모음의 **확장 프로그램**(퍼즐 아이콘)에서 **Time per Turn**를 눌러 실행하세요. 옆의 핀을 누르면 다음부터 도구 모음에서 바로 열 수 있습니다.
+3. 다운로드 폴더에서 `time-per-turn-Chrome.zip`을 확장 프로그램 페이지로 끌어다 놓으세요. 설치되면 도구 모음의 **확장 프로그램**(퍼즐 아이콘)에서 **time-per-turn**을 눌러 실행하세요. 옆의 핀을 누르면 다음부터 도구 모음에서 바로 열 수 있습니다.
 
 끌어다 놓아도 설치되지 않으면 ZIP을 보관할 폴더에 풀고 **압축해제된 확장 프로그램을 로드합니다**를 눌러 `manifest.json`이 들어 있는 폴더를 선택하세요. 회사 정책으로 개발자 모드가 잠겨 있다면 사내 Chrome 관리자에게 설치를 요청하세요.
 
@@ -88,7 +88,7 @@ Windows에서는 타이머 제목 표시줄의 **최소화(–)** 버튼을 누�
 | `tests/` | 시간 계산, 버튼 동작, 압축을 푼 배포본의 실행 테스트 |
 | `dist/` | 로컬에서 만든 배포 ZIP |
 
-저장소에서 Windows 앱을 실행하려면 `windows/MeetingTimer.bat`을 여세요. 두 ZIP은 루트에서 `.\scripts\Build-Release.ps1`을 실행하면 생성됩니다. 모델과 화면 테스트를 실행하는 방법은 [영문 개발자 가이드](CLAUDE.md)에 있습니다.
+저장소에서 Windows 앱을 실행하려면 `windows/time-per-turn.bat`을 여세요. 두 ZIP은 루트에서 `.\scripts\Build-Release.ps1`을 실행하면 생성됩니다. 모델과 화면 테스트를 실행하는 방법은 [영문 개발자 가이드](CLAUDE.md)에 있습니다.
 
 ## 보안 사항
 
